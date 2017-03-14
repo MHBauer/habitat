@@ -18,9 +18,9 @@ use error::Result;
 
 pub fn migrate(migrator: &mut Migrator) -> Result<()> {
     migrator.migrate("originsrv",
-                     r#"CREATE SEQUENCE IF NOT EXISTS origin_invitations_id_seq;"#)?;
+                 r#"CREATE SEQUENCE IF NOT EXISTS origin_invitations_id_seq;"#)?;
     migrator.migrate("originsrv",
-                     r#"CREATE TABLE origin_invitations (
+                 r#"CREATE TABLE origin_invitations (
                         id bigint PRIMARY KEY DEFAULT next_id_v1('origin_invitations_id_seq'),
                         origin_id bigint REFERENCES origins(id),
                         origin_name text,
@@ -30,6 +30,7 @@ pub fn migrate(migrator: &mut Migrator) -> Result<()> {
                         ignored bool DEFAULT false,
                         created_at timestamptz DEFAULT now(),
                         updated_at timestamptz,
+                        account_sync bool DEFAULT false,
                         UNIQUE (origin_id, account_id)
                         )"#)?;
     migrator.migrate("originsrv",
@@ -51,7 +52,7 @@ pub fn migrate(migrator: &mut Migrator) -> Result<()> {
                      END
                  $$ LANGUAGE plpgsql VOLATILE"#)?;
     migrator.migrate("originsrv",
-                     r#"CREATE OR REPLACE FUNCTION get_origin_invitations_for_origin_v1 (
+                 r#"CREATE OR REPLACE FUNCTION get_origin_invitations_for_origin_v1 (
                    oi_origin_id bigint
                  ) RETURNS SETOF origin_invitations AS $$
                     BEGIN
@@ -96,6 +97,20 @@ pub fn migrate(migrator: &mut Migrator) -> Result<()> {
                     BEGIN
                         RETURN QUERY SELECT true FROM origin_invitations WHERE id = oi_invite_id AND account_id = oi_account_id;
                         RETURN;
+                    END
+                    $$ LANGUAGE plpgsql VOLATILE"#)?;
+    migrator.migrate("originsrv",
+                     r#"CREATE OR REPLACE FUNCTION get_origin_invitations_not_synced_with_account_v1 () RETURNS SETOF origin_invitations AS $$
+                    BEGIN
+                        RETURN QUERY SELECT * FROM origin_invitations WHERE account_sync = false
+                          ORDER BY created_at ASC;
+                        RETURN;
+                    END
+                    $$ LANGUAGE plpgsql STABLE"#)?;
+    migrator.migrate("originsrv",
+                 r#"CREATE OR REPLACE FUNCTION set_account_sync_v1 (oi_id bigint) RETURNS void AS $$
+                    BEGIN
+                        UPDATE origin_invitations SET account_sync = true, updated_at = now() WHERE id = oi_id;
                     END
                     $$ LANGUAGE plpgsql VOLATILE"#)?;
 

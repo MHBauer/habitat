@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env;
+
 use hyper;
 use iron::Handler;
 use iron::headers::{self, Authorization, Bearer};
@@ -163,22 +165,59 @@ pub struct Cors;
 impl AfterMiddleware for Cors {
     fn after(&self, _req: &mut Request, mut res: Response) -> IronResult<Response> {
         res.headers.set(headers::AccessControlAllowOrigin::Any);
-        res.headers.set(headers::AccessControlAllowHeaders(vec![UniCase("authorization"
-                                                                            .to_string()),
-                                                                UniCase("range".to_string())]));
-        res.headers.set(headers::AccessControlAllowMethods(vec![Method::Put, Method::Delete]));
+        res.headers
+            .set(headers::AccessControlAllowHeaders(vec![UniCase("authorization".to_string()),
+                                                         UniCase("range".to_string())]));
+        res.headers
+            .set(headers::AccessControlAllowMethods(vec![Method::Put, Method::Delete]));
         Ok(res)
     }
 }
 
 pub fn session_create(github: &GitHubClient, token: &str) -> IronResult<Session> {
+    if env::var_os("HAB_FUNC_TEST").is_some() {
+        let request = match token {
+            "bobo" => {
+                let mut request = SessionCreate::new();
+                request.set_token(token.to_string());
+                request.set_extern_id(0);
+                request.set_email("bobo@example.com".to_string());
+                request.set_name("bobo".to_string());
+                request.set_provider(OAuthProvider::GitHub);
+                request
+            }
+            "logan" => {
+                let mut request = SessionCreate::new();
+                request.set_token(token.to_string());
+                request.set_extern_id(1);
+                request.set_email("logan@example.com".to_string());
+                request.set_name("logan".to_string());
+                request.set_provider(OAuthProvider::GitHub);
+                request
+            }
+            user => {
+                panic!("You need to define the stub user {} during HAB_FUNC_TEST",
+                       user)
+            }
+        };
+        let mut conn = Broker::connect().unwrap();
+        match conn.route::<SessionCreate, Session>(&request) {
+            Ok(session) => return Ok(session),
+            Err(err) => {
+                let body = itry!(serde_json::to_string(&err));
+                let status = net_err_to_http(err.get_code());
+                return Err(IronError::new(err, (body, status)));
+            }
+        }
+    }
     match github.user(&token) {
         Ok(user) => {
             // Select primary email. If no primary email can be found, use any email. If
             // no email is associated with account return an access denied error.
             let email = match github.emails(&token) {
                 Ok(ref emails) => {
-                    emails.iter()
+                    emails
+                        .iter()
                         .find(|e| e.primary)
                         .unwrap_or(&emails[0])
                         .email

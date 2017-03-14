@@ -20,6 +20,8 @@ use std::sync::{Arc, RwLock};
 use protocol::net;
 use zmq;
 
+use hab_net::config::RouteAddrs;
+use hab_net::routing::Broker;
 use hab_net::{Application, Supervisor};
 use hab_net::dispatcher::prelude::*;
 use hab_net::server::{Envelope, NetIdent, RouteConn, Service, ZMQ_CONTEXT};
@@ -140,17 +142,23 @@ impl Application for Server {
 
     fn run(&mut self) -> Result<()> {
         try!(self.be_sock.bind(BE_LISTEN_ADDR));
+        let broker = {
+            let cfg = self.config.read().unwrap();
+            Broker::run(Self::net_ident(), cfg.route_addrs())
+        };
         let datastore = {
             let cfg = self.config.read().unwrap();
             DataStore::new(cfg.deref())?
         };
         try!(datastore.setup());
+        datastore.start_async();
         let cfg = self.config.clone();
         let init_state = ServerState::new(datastore);
         let sup: Supervisor<Worker> = Supervisor::new(cfg, init_state);
         try!(sup.start());
         try!(self.connect());
         try!(zmq::proxy(&mut self.router.socket, &mut self.be_sock));
+        broker.join().unwrap();
         Ok(())
     }
 }

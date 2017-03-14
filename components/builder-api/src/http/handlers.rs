@@ -14,6 +14,8 @@
 
 //! A collection of handlers for the HTTP server's router
 
+use std::env;
+
 use base64;
 use bodyparser;
 use depot::server::check_origin_access;
@@ -65,6 +67,19 @@ pub fn github_authenticate(req: &mut Request) -> IronResult<Response> {
     };
 
     let github = req.get::<persistent::Read<GitHubCli>>().unwrap();
+
+    if env::var_os("HAB_FUNC_TEST").is_some() {
+        let session = try!(session_create(&github, &code));
+
+        log_event!(req,
+                   Event::GithubAuthenticate {
+                       user: session.get_name().to_string(),
+                       account: session.get_id().to_string(),
+                   });
+
+        return Ok(render_json(status::Ok, &session));
+    }
+
     match github.authenticate(&code) {
         Ok(token) => {
             let session = try!(session_create(&github, &token));
@@ -95,10 +110,7 @@ pub fn job_create(req: &mut Request) -> IronResult<Response> {
         }
     }
     // TODO: SA - Eliminate need to clone the session
-    let session = req.extensions
-        .get::<Authenticated>()
-        .unwrap()
-        .clone();
+    let session = req.extensions.get::<Authenticated>().unwrap().clone();
     let mut conn = Broker::connect().unwrap();
     let project = match conn.route::<OriginProjectGet, OriginProject>(&project_get) {
         Ok(project) => project,
@@ -189,14 +201,8 @@ pub fn accept_invitation(req: &mut Request) -> IronResult<Response> {
     let mut request = OriginInvitationAcceptRequest::new();
     request.set_ignore(false);
     // TODO: SA - Eliminate need to clone the session and params
-    let session = req.extensions
-        .get::<Authenticated>()
-        .unwrap()
-        .clone();
-    let params = &req.extensions
-                      .get::<Router>()
-                      .unwrap()
-                      .clone();
+    let session = req.extensions.get::<Authenticated>().unwrap().clone();
+    let params = &req.extensions.get::<Router>().unwrap().clone();
 
     request.set_account_accepting_request(session.get_id());
     match params.find("invitation_id").unwrap().parse::<u64>() {
@@ -227,14 +233,8 @@ pub fn ignore_invitation(req: &mut Request) -> IronResult<Response> {
     let mut request = OriginInvitationAcceptRequest::new();
     request.set_ignore(true);
     // TODO: SA - Eliminate need to clone the session and params
-    let session = req.extensions
-        .get::<Authenticated>()
-        .unwrap()
-        .clone();
-    let params = &req.extensions
-                      .get::<Router>()
-                      .unwrap()
-                      .clone();
+    let session = req.extensions.get::<Authenticated>().unwrap().clone();
+    let params = &req.extensions.get::<Router>().unwrap().clone();
 
     request.set_account_accepting_request(session.get_id());
     match params.find("invitation_id").unwrap().parse::<u64>() {
@@ -265,10 +265,7 @@ pub fn project_create(req: &mut Request) -> IronResult<Response> {
     let mut project = OriginProject::new();
     let mut origin_get = OriginGet::new();
     let github = req.get::<persistent::Read<GitHubCli>>().unwrap();
-    let session = req.extensions
-        .get::<Authenticated>()
-        .unwrap()
-        .clone();
+    let session = req.extensions.get::<Authenticated>().unwrap().clone();
     let (organization, repo) = match req.get::<bodyparser::Struct<ProjectCreateReq>>() {
         Ok(Some(body)) => {
             if body.origin.len() <= 0 {

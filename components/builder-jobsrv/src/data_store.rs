@@ -39,7 +39,7 @@ impl DataStore {
                              config.pool_size,
                              config.datastore_connection_retry_ms,
                              config.datastore_connection_timeout,
-                             config.datastore_connection_test)?;
+                             vec![0])?;
         Ok(DataStore { pool: pool })
     }
 
@@ -53,12 +53,15 @@ impl DataStore {
     /// This includes all the schema and data migrations, along with stored procedures for data
     /// access.
     pub fn setup(&self) -> Result<()> {
-        let mut migrator = Migrator::new(&self.pool);
+        let conn = self.pool.get_raw()?;
+        let xact = conn.transaction().map_err(Error::DbTransactionStart)?;
+        let mut migrator = Migrator::new(xact, vec![0]);
+
         migrator.setup()?;
 
         // The core jobs table
         migrator.migrate("jobsrv",
-                         r#"CREATE TABLE jobs (
+                     r#"CREATE TABLE jobs (
                                     id bigint PRIMARY KEY,
                                     owner_id bigint,
                                     job_state text,
@@ -156,6 +159,9 @@ impl DataStore {
                          $$ LANGUAGE plpgsql VOLATILE"#)?;
         migrator.migrate("jobsrv",
                          r#"CREATE INDEX pending_jobs_index_v1 on jobs(created_at) WHERE job_state = 'Pending'"#)?;
+
+        migrator.finish()?;
+
         Ok(())
     }
 
@@ -167,7 +173,7 @@ impl DataStore {
     /// * If the job cannot be created
     /// * If the job has an unknown VCS type
     pub fn create_job(&self, job: &mut jobsrv::Job) -> Result<()> {
-        let conn = self.pool.get()?;
+        let conn = self.pool.get_raw()?;
 
         if job.get_project().get_vcs_type() == "git" {
             // BUG - the insert query should be creating and assigning back a job_id,
@@ -250,7 +256,7 @@ impl DataStore {
     /// * If a connection cannot be gotten from the pool
     /// * If the job cannot be selected from the database
     pub fn get_job(&self, id: u64) -> Result<Option<jobsrv::Job>> {
-        let conn = self.pool.get()?;
+        let conn = self.pool.get_raw()?;
         let rows = &conn.query("SELECT * FROM get_job_v1($1)", &[&(id as i64)])
                         .map_err(Error::JobGet)?;
         for row in rows {
@@ -269,7 +275,7 @@ impl DataStore {
     /// * If the row returned cannot be translated into a Job
     pub fn pending_jobs(&self, count: i32) -> Result<Vec<jobsrv::Job>> {
         let mut jobs = Vec::new();
-        let conn = self.pool.get()?;
+        let conn = self.pool.get_raw()?;
         let rows = &conn.query("SELECT * FROM pending_jobs_v1($1)", &[&count])
                         .map_err(Error::JobPending)?;
         for row in rows {
@@ -286,7 +292,7 @@ impl DataStore {
     /// * If a connection cannot be gotten from the pool
     /// * If the jobs state cannot be updated in the database
     pub fn set_job_state(&self, job: &jobsrv::Job) -> Result<()> {
-        let conn = self.pool.get()?;
+        let conn = self.pool.get_raw()?;
         let job_id = job.get_id() as i64;
         let job_state = match job.get_state() {
             jobsrv::JobState::Dispatched => "Dispatched",
