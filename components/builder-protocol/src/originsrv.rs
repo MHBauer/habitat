@@ -4,7 +4,11 @@
 // this file ("Licensee") apply to Licensee's use of the Software until such time that the Software
 // is made available under an open source license such as the Apache 2.0 License.
 
+use std::fmt;
 use std::result;
+
+use hab_core;
+use hab_core::package::Identifiable;
 
 use serde::{Serialize, Serializer};
 use serde::ser::SerializeStruct;
@@ -386,5 +390,71 @@ impl Serialize for OriginProject {
         try!(state.serialize_field("vcs_type", self.get_vcs_type()));
         try!(state.serialize_field("vcs_data", self.get_vcs_data()));
         state.end()
+    }
+}
+
+impl Identifiable for OriginPackageIdent {
+    fn origin(&self) -> &str {
+        self.get_origin()
+    }
+
+    fn name(&self) -> &str {
+        self.get_name()
+    }
+
+    fn version(&self) -> Option<&str> {
+        let ver = self.get_version();
+        if ver.is_empty() { None } else { Some(ver) }
+    }
+
+    fn release(&self) -> Option<&str> {
+        let rel = self.get_release();
+        if rel.is_empty() { None } else { Some(rel) }
+    }
+}
+
+impl fmt::Display for OriginPackageIdent {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if !self.get_version().is_empty() && !self.get_release().is_empty() {
+            write!(f,
+                   "{}/{}/{}/{}",
+                   self.get_origin(),
+                   self.get_name(),
+                   self.get_version(),
+                   self.get_release())
+        } else if !self.get_version().is_empty() {
+            write!(f,
+                   "{}/{}/{}",
+                   self.get_origin(),
+                   self.get_name(),
+                   self.get_version())
+        } else {
+            write!(f, "{}/{}", self.get_origin(), self.get_name())
+        }
+    }
+}
+
+impl Into<hab_core::package::PackageIdent> for OriginPackageIdent {
+    fn into(self) -> hab_core::package::PackageIdent {
+        hab_core::package::PackageIdent::new(self.get_origin(),
+                                   self.get_name(),
+                                   Some(self.get_version()),
+                                   Some(self.get_release()))
+    }
+}
+
+impl Routable for OriginPackageGet {
+    type H = InstaId;
+
+    fn route_key(&self) -> Option<Self::H> {
+        Some(InstaId(self.get_owner_id()))
+    }
+}
+
+impl Routable for OriginPackageCreate {
+    type H = InstaId;
+
+    fn route_key(&self) -> Option<Self::H> {
+        Some(InstaId(self.get_owner_id()))
     }
 }

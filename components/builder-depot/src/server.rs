@@ -28,6 +28,7 @@ use hab_core::crypto::keys::{self, PairType};
 use hab_core::crypto::SigKeyPair;
 use hab_core::event::*;
 use bld_core::metrics::*;
+use protocol::net::NetError;
 use hab_net::config::RouteAddrs;
 use hab_net::http::controller::*;
 use hab_net::privilege;
@@ -56,6 +57,7 @@ use url;
 use urlencoded::UrlEncodedQuery;
 
 use super::Depot;
+use super::DepotUtil;
 use config::Config;
 use error::{Error, Result};
 
@@ -579,7 +581,7 @@ fn upload_origin_secret_key(req: &mut Request) -> IronResult<Response> {
 }
 
 fn upload_package(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
+    let lock = req.get::<persistent::State<DepotUtil>>().expect("depot not found");
     let depot = lock.read().expect("depot read lock is poisoned");
     let checksum_from_param = match extract_query_value("checksum", req) {
         Some(checksum) => checksum,
@@ -587,7 +589,7 @@ fn upload_package(req: &mut Request) -> IronResult<Response> {
     };
     let ident = {
         let params = req.extensions.get::<Router>().unwrap();
-        ident_from_params(params)
+        origin_ident_from_params(params)
     };
 
     if !ident.valid() {
@@ -646,16 +648,24 @@ fn upload_package(req: &mut Request) -> IronResult<Response> {
         return Ok(Response::with(status::NotImplemented));
     };
 
-    match depot.datastore.packages.find(&ident) {
-        Ok(_) |
-        Err(dbcache::Error::EntityNotFound) => {
-            if depot.archive(&ident, &target_from_artifact).is_some() {
-                return Ok(Response::with((status::Conflict)));
+    let mut ident_req = OriginPackageGet::new();
+    ident_req.set_owner_id(session.get_id());
+    ident_req.set_ident(ident.clone());
+
+    match route_message::<OriginPackageGet, OriginPackageIdent>(req, &ident_req) {
+        Ok(_) => return Ok(Response::with((status::Conflict))),
+        Err(err) => {
+            match err.get_code() {
+                ErrCode::ENTITY_NOT_FOUND => {
+                    if depot.archive(&ident, &target_from_artifact).is_some() {
+                        return Ok(Response::with((status::Conflict)));
+                    }
+                }
+                _ => {
+                    error!("upload_package:1, err={:?}", err);
+                    return Ok(Response::with(status::InternalServerError));
+                }
             }
-        }
-        Err(e) => {
-            error!("upload_package:1, err={:?}", e);
-            return Ok(Response::with(status::InternalServerError));
         }
     }
 
@@ -696,10 +706,11 @@ fn upload_package(req: &mut Request) -> IronResult<Response> {
         }
     };
     if ident.satisfies(object.get_ident()) {
-        depot.datastore
-            .packages
-            .write(&object)
-            .unwrap();
+        let mut package_req = OriginPackageCreate::new();
+        package_req.set_owner_id(session.get_id());
+        package_req.set_ident(ident.clone());
+        package_req.set_target(target_from_artifact.to_string());
+        route_message::<OriginPackageCreate, OriginPackage>(req, &package_req).unwrap();
 
         log_event!(req,
                    Event::PackageUpload {
@@ -1453,6 +1464,19 @@ fn ident_from_params(params: &Params) -> depotsrv::PackageIdent {
     ident
 }
 
+fn origin_ident_from_params(params: &Params) -> OriginPackageIdent {
+    let mut ident = OriginPackageIdent::new();
+    ident.set_origin(params.find("origin").unwrap().to_string());
+    ident.set_name(params.find("pkg").unwrap().to_string());
+    if let Some(ver) = params.find("version") {
+        ident.set_version(ver.to_string());
+    }
+    if let Some(rel) = params.find("release") {
+        ident.set_release(rel.to_string());
+    }
+    ident
+}
+
 fn target_from_headers(user_agent_header: &UserAgent) -> result::Result<PackageTarget, Response> {
     let user_agent = user_agent_header.as_str();
     debug!("Headers = {}", &user_agent);
@@ -1639,7 +1663,7 @@ impl From<Error> for IronError {
 #[cfg(test)]
 mod test {
 
-    use iron::{self, method, Handler, Headers, Request, Url};
+    use iron::{self, method, Handler, Headers, Request, status, Url};
     use iron::middleware::BeforeMiddleware;
     use iron::prelude::*;
     use iron_test::mock_stream::MockStream;
@@ -1647,10 +1671,15 @@ mod test {
     use hyper;
     use hyper::net::NetworkStream;
     use hyper::buffer::BufReader;
+
+    use hab_core::crypto::hash;
+    use protocol::net::{self, ErrCode};
     use protocol::sessionsrv::Session;
     use protobuf;
 
+    use std::fs::File;
     use std::io::Cursor;
+    use std::path::PathBuf;
 
     use super::*;
     use super::super::DepotUtil;
@@ -1659,7 +1688,7 @@ mod test {
     pub struct AuthenticatedTest;
 
     impl BeforeMiddleware for AuthenticatedTest {
-        fn before(&self, req: &mut Request) -> IronResult<()> {
+        fn before(&self, _: &mut Request) -> IronResult<()> {
             Ok(())
         }
     }
@@ -1755,5 +1784,43 @@ mod test {
                 \"location\":\"/origins/my_name2/keys/my_rev2\"\
             }\
         ]");
+    }
+
+    #[test]
+    fn upload_package() {
+        let depot = DepotUtil::new(Config::default()).unwrap();
+        let mut ident = OriginPackageIdent::new();
+        ident.set_origin("core".to_string());
+        ident.set_name("cacerts".to_string());
+        ident.set_version("2017.01.17".to_string());
+        ident.set_release("20170209064044".to_string());
+        let file_name = depot.archive_path(&ident, &PackageTarget::from_str("x86_64-windows").unwrap());
+        let _ = fs::remove_file(file_name);
+
+        let mut broker: TestableBroker = Default::default();
+
+        let mut access_res = CheckOriginAccessResponse::new();
+        access_res.set_has_access(true);
+        broker.setup::<CheckOriginAccessRequest, CheckOriginAccessResponse>(&access_res);
+        
+        broker.setup_error::<OriginPackageGet>(net::err(ErrCode::ENTITY_NOT_FOUND,""));
+        broker.setup::<OriginPackageCreate, OriginPackage>(&OriginPackage::new());
+
+        let mut body: Vec<u8> = Vec::new();
+        let path = hart_file("core-cacerts-2017.01.17-20170209064044-x86_64-windows.hart");
+        File::open(&path).unwrap().read_to_end(&mut body).unwrap();
+        let checksum = hash::hash_file(&path).unwrap();
+
+
+        let response = iron_request(method::Post,
+                                    format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044?checksum={}", checksum).as_str(),
+                                    &mut body,
+                                    Headers::new(),
+                                    broker).unwrap();
+        assert_eq!(response.status, Some(status::Created));
+        assert_eq!(response.headers.get::<headers::Location>(), Some(&headers::Location(format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download?checksum={}", checksum))));
+
+        let result_body = response::extract_body_to_string(response);
+        assert_eq!(result_body, "/pkgs/core/cacerts/2017.01.17/20170209064044/download");
     }
 }
