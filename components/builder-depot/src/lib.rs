@@ -120,7 +120,9 @@ pub struct DepotUtil {
 
 impl DepotUtil {
     pub fn new(config: Config) -> DepotUtil {
-        DepotUtil { config: config }
+        DepotUtil {
+               config: config,
+           }
     }
 
     // Return a PackageArchive representing the given package. None is returned if the Depot
