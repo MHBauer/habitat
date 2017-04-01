@@ -1675,7 +1675,6 @@ mod test {
     use hab_core::crypto::hash;
     use protocol::net::{self, ErrCode};
     use protocol::sessionsrv::Session;
-    use protobuf;
 
     use std::fs::File;
     use std::io::Cursor;
@@ -1794,11 +1793,12 @@ mod test {
         ident.set_name("cacerts".to_string());
         ident.set_version("2017.01.17".to_string());
         ident.set_release("20170209064044".to_string());
-        let file_name = depot.archive_path(&ident, &PackageTarget::from_str("x86_64-windows").unwrap());
-        let _ = fs::remove_file(file_name);
+        let target = PackageTarget::from_str("x86_64-windows").unwrap();
+        let file_name = depot.archive_path(&ident, &target);
+        let _ = fs::remove_file(&file_name);
 
-        let mut broker: TestableBroker = Default::default();
-
+        let mut broker:TestableBroker = Default::default();
+        
         let mut access_res = CheckOriginAccessResponse::new();
         access_res.set_has_access(true);
         broker.setup::<CheckOriginAccessRequest, CheckOriginAccessResponse>(&access_res);
@@ -1811,16 +1811,22 @@ mod test {
         File::open(&path).unwrap().read_to_end(&mut body).unwrap();
         let checksum = hash::hash_file(&path).unwrap();
 
-
-        let response = iron_request(method::Post,
+        let (resp, msgs) = iron_request(method::Post,
                                     format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044?checksum={}", checksum).as_str(),
                                     &mut body,
                                     Headers::new(),
-                                    broker).unwrap();
+                                    broker);
+
+        let response = resp.unwrap();
         assert_eq!(response.status, Some(status::Created));
         assert_eq!(response.headers.get::<headers::Location>(), Some(&headers::Location(format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download?checksum={}", checksum))));
 
         let result_body = response::extract_body_to_string(response);
         assert_eq!(result_body, "/pkgs/core/cacerts/2017.01.17/20170209064044/download");
+        assert!(fs::metadata(&file_name).is_ok());
+
+        let package_req = msgs.get::<OriginPackageCreate>().unwrap();
+        assert_eq!(package_req.get_ident().to_string(), ident.to_string());
+        assert_eq!(package_req.get_target().to_string(), target.to_string());
     }
 }
