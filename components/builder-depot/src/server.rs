@@ -1786,6 +1786,7 @@ mod test {
 
     #[test]
     fn upload_package() {
+        //Remove file saved from previous test
         let depot = DepotUtil::new(Config::default());
         let mut ident = OriginPackageIdent::new();
         ident.set_origin("core".to_string());
@@ -1796,15 +1797,15 @@ mod test {
         let file_name = depot.archive_path(&ident, &target);
         let _ = fs::remove_file(&file_name);
 
+        //setup broker messages
         let mut broker:TestableBroker = Default::default();
-        
         let mut access_res = CheckOriginAccessResponse::new();
         access_res.set_has_access(true);
         broker.setup::<CheckOriginAccessRequest, CheckOriginAccessResponse>(&access_res);
-        
         broker.setup_error::<OriginPackageGet>(net::err(ErrCode::ENTITY_NOT_FOUND,""));
         broker.setup::<OriginPackageCreate, OriginPackage>(&OriginPackage::new());
 
+        //inject hart fixture to upload
         let mut body: Vec<u8> = Vec::new();
         let path = hart_file("core-cacerts-2017.01.17-20170209064044-x86_64-windows.hart");
         File::open(&path).unwrap().read_to_end(&mut body).unwrap();
@@ -1816,14 +1817,17 @@ mod test {
                                     Headers::new(),
                                     broker);
 
+        //assert headers
         let response = resp.unwrap();
         assert_eq!(response.status, Some(status::Created));
         assert_eq!(response.headers.get::<headers::Location>(), Some(&headers::Location(format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download?checksum={}", checksum))));
 
+        //assert body
         let result_body = response::extract_body_to_string(response);
         assert_eq!(result_body, "/pkgs/core/cacerts/2017.01.17/20170209064044/download");
         assert!(fs::metadata(&file_name).is_ok());
 
+        //assert we sent the corect data to postgres
         let package_req = msgs.get::<OriginPackageCreate>().unwrap();
         assert_eq!(package_req.get_ident().to_string(), ident.to_string());
         assert_eq!(package_req.get_target().to_string(), target.to_string());
