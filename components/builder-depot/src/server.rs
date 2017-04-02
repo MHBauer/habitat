@@ -28,7 +28,6 @@ use hab_core::crypto::keys::{self, PairType};
 use hab_core::crypto::SigKeyPair;
 use hab_core::event::*;
 use bld_core::metrics::*;
-use protocol::net::NetError;
 use hab_net::config::RouteAddrs;
 use hab_net::http::controller::*;
 use hab_net::privilege;
@@ -1787,7 +1786,7 @@ mod test {
 
     #[test]
     fn upload_package() {
-        let depot = DepotUtil::new(Config::default()).unwrap();
+        let depot = DepotUtil::new(Config::default());
         let mut ident = OriginPackageIdent::new();
         ident.set_origin("core".to_string());
         ident.set_name("cacerts".to_string());
