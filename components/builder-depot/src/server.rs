@@ -884,13 +884,14 @@ fn download_latest_origin_key(req: &mut Request) -> IronResult<Response> {
     Ok(response)
 }
 
-
-
 fn download_package(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
+    let lock = req.get::<persistent::State<DepotUtil>>().expect("depot not found");
     let depot = lock.read().expect("depot read lock is poisoned");
-    let params = req.extensions.get::<Router>().unwrap();
-    let ident = ident_from_params(params);
+    let mut ident_req = OriginPackageGet::new();
+    {
+        let params = req.extensions.get::<Router>().unwrap();
+        ident_req.set_ident(origin_ident_from_params(params));
+    };
     let agent_target = target_from_headers(&req.headers.get::<UserAgent>().unwrap()).unwrap();
     if !depot.config.supported_targets.contains(&agent_target) {
         error!("Unsupported client platform ({}) for this depot.",
@@ -898,7 +899,7 @@ fn download_package(req: &mut Request) -> IronResult<Response> {
         return Ok(Response::with(status::NotImplemented));
     }
 
-    match depot.datastore.packages.find(&ident) {
+    match route_message::<OriginPackageGet, OriginPackageIdent>(req, &ident_req) {
         Ok(ident) => {
             if let Some(archive) = depot.archive(&ident, &agent_target) {
                 match fs::metadata(&archive.path) {
@@ -921,10 +922,14 @@ fn download_package(req: &mut Request) -> IronResult<Response> {
                         data integrity.");
             }
         }
-        Err(dbcache::Error::EntityNotFound) => Ok(Response::with((status::NotFound))),
-        Err(e) => {
-            error!("download_package:1, err={:?}", e);
-            Ok(Response::with(status::InternalServerError))
+        Err(err) => {
+            match err.get_code() {
+                ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                _ => {
+                    error!("download_package:1, err={:?}", err);
+                    Ok(Response::with(status::InternalServerError))
+                }
+            }
         }
     }
 }
@@ -1798,11 +1803,11 @@ mod test {
         let _ = fs::remove_file(&file_name);
 
         //setup broker messages
-        let mut broker:TestableBroker = Default::default();
+        let mut broker: TestableBroker = Default::default();
         let mut access_res = CheckOriginAccessResponse::new();
         access_res.set_has_access(true);
         broker.setup::<CheckOriginAccessRequest, CheckOriginAccessResponse>(&access_res);
-        broker.setup_error::<OriginPackageGet>(net::err(ErrCode::ENTITY_NOT_FOUND,""));
+        broker.setup_error::<OriginPackageGet>(net::err(ErrCode::ENTITY_NOT_FOUND, ""));
         broker.setup::<OriginPackageCreate, OriginPackage>(&OriginPackage::new());
 
         //inject hart fixture to upload
@@ -1820,16 +1825,65 @@ mod test {
         //assert headers
         let response = resp.unwrap();
         assert_eq!(response.status, Some(status::Created));
-        assert_eq!(response.headers.get::<headers::Location>(), Some(&headers::Location(format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download?checksum={}", checksum))));
+        assert_eq!(response.headers.get::<headers::Location>(),
+                   Some(&headers::Location(format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download?checksum={}",
+                                                   checksum))));
 
         //assert body
         let result_body = response::extract_body_to_string(response);
-        assert_eq!(result_body, "/pkgs/core/cacerts/2017.01.17/20170209064044/download");
+        assert_eq!(result_body,
+                   "/pkgs/core/cacerts/2017.01.17/20170209064044/download");
         assert!(fs::metadata(&file_name).is_ok());
 
         //assert we sent the corect data to postgres
         let package_req = msgs.get::<OriginPackageCreate>().unwrap();
         assert_eq!(package_req.get_ident().to_string(), ident.to_string());
         assert_eq!(package_req.get_target().to_string(), target.to_string());
+    }
+
+    #[test]
+    fn download_package() {
+        //upload hart so it gets saved to disk
+        let mut upload_broker: TestableBroker = Default::default();
+        let mut access_res = CheckOriginAccessResponse::new();
+        access_res.set_has_access(true);
+        upload_broker.setup::<CheckOriginAccessRequest, CheckOriginAccessResponse>(&access_res);
+        upload_broker.setup_error::<OriginPackageGet>(net::err(ErrCode::ENTITY_NOT_FOUND, ""));
+        upload_broker.setup::<OriginPackageCreate, OriginPackage>(&OriginPackage::new());
+
+        let mut body: Vec<u8> = Vec::new();
+        let path = hart_file("core-cacerts-2017.01.17-20170209064044-x86_64-windows.hart");
+        File::open(&path).unwrap().read_to_end(&mut body).unwrap();
+        let checksum = hash::hash_file(&path).unwrap();
+
+        iron_request(method::Post,
+                                    format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044?checksum={}", checksum).as_str(),
+                                    &mut body,
+                                    Headers::new(),
+                                    upload_broker);
+
+        let mut download_broker: TestableBroker = Default::default();
+
+        //setup our package db request
+        let mut ident = OriginPackageIdent::new();
+        ident.set_origin("core".to_string());
+        ident.set_name("cacerts".to_string());
+        ident.set_version("2017.01.17".to_string());
+        ident.set_release("20170209064044".to_string());
+        download_broker.setup::<OriginPackageGet, OriginPackageIdent>(&ident);
+
+        //set the user agent to look like a windows download
+        let mut headers = Headers::new();
+        headers.set(UserAgent("hab/0.20.0-dev/20170326090935 (x86_64-windows; 10.0.14915)".to_string()));
+
+        let (response, _) = iron_request(method::Get,
+                                         "http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download",
+                                         &mut Vec::new(),
+                                         headers,
+                                         download_broker);
+
+        //assert status
+        let response = response.unwrap();
+        assert_eq!(response.status, Some(status::Ok));
     }
 }
