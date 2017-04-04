@@ -225,6 +225,38 @@ message OriginPackage {
   optional uint64 owner_id = 3;
 }
 
+message OriginPackageListRequest {
+  optional uint64 owner_id = 1;
+  optional uint64 origin_id = 2;
+  optional uint64 start = 3;
+  optional uint64 stop = 4;
+}
+
+message OriginPackageListResponse {
+  optional uint64 owner_id = 1;
+  optional uint64 origin_id = 2;
+  optional uint64 start = 3;
+  optional uint64 stop = 4;
+  optional uint64 count = 5;
+  repeated OriginPackage packages = 6;
+}
+
+message OriginPackageUniqueListRequest {
+  optional uint64 owner_id = 1;
+  optional uint64 origin_id = 2;
+  optional uint64 start = 3;
+  optional uint64 stop = 4;
+}
+
+message OriginPackageUniqueListResponse {
+  optional uint64 owner_id = 1;
+  optional uint64 origin_id = 2;
+  optional uint64 start = 3;
+  optional uint64 stop = 4;
+  optional uint64 count = 5;
+  repeated OriginPackageIdent idents = 6;
+}
+
 message OriginKeyIdent {
   optional string origin = 1;
   optional string revision = 2;

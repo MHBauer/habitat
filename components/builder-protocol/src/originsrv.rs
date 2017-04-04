@@ -458,3 +458,11 @@ impl Routable for OriginPackageCreate {
         Some(InstaId(self.get_owner_id()))
     }
 }
+
+impl Routable for OriginPackageUniqueListRequest {
+    type H = InstaId;
+
+    fn route_key(&self) -> Option<Self::H> {
+        Some(InstaId(self.get_origin_id()))
+    }
+}

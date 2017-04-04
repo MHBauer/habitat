@@ -1908,4 +1908,52 @@ mod test {
         let result_body = response::extract_body_to_bytes(response);
         assert_eq!(result_body, body);
     }
+
+    #[test]
+    fn list_unique_packages() {
+        let mut broker: TestableBroker = Default::default();
+
+        let mut pkg_res = OriginPackageUniqueListResponse::new();
+        pkg_res.set_start(0);
+        pkg_res.set_stop(1);
+        pkg_res.set_count(2);
+        let mut idents = protobuf::RepeatedField::new();
+
+        let mut ident1 = OriginPackageIdent::new();
+        ident1.set_origin("org".to_string());
+        ident1.set_name("name1".to_string());
+        idents.push(ident1);
+
+        let mut ident2 = OriginPackageIdent::new();
+        ident2.set_origin("org".to_string());
+        ident2.set_name("name2".to_string());
+        idents.push(ident2);
+
+        pkg_res.set_idents(idents);
+        broker.setup::<OriginPackageUniqueListRequest, OriginPackageUniqueListResponse>(&pkg_res);
+
+        let (response, _) = iron_request(method::Get,
+                                         "http://localhost/org/pkgs",
+                                         &mut Vec::new(),
+                                         Headers::new(),
+                                         broker);
+        let result_body = response::extract_body_to_string(response.unwrap());
+
+        assert_eq!(result_body,
+                   "{\
+            range_start: 0,\
+            range_end: 1,\
+            total_count: 2,\
+            package_list: [\
+                {\
+                    \"origin\":\"org\",\
+                    \"name\":\"name1\"\
+                },\
+                {\
+                    \"origin\":\"org\",\
+                    \"name\":\"name2\"\
+                }\
+            ]\
+        }");
+    }
 }
