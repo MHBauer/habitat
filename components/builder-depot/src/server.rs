@@ -905,15 +905,15 @@ fn download_package(req: &mut Request) -> IronResult<Response> {
             if let Some(archive) = depot.archive(&ident, &agent_target) {
                 match fs::metadata(&archive.path) {
                     Ok(_) => {
-                        let mut response = Response::with(status::Ok);
+                        let mut response = Response::with((status::Ok, archive.path.clone()));
                         do_cache_response(&mut response);
                         let disp = ContentDisposition {
                             disposition: DispositionType::Attachment,
-                            parameters: vec![DispositionParam::Filename(
-                                Charset::Iso_8859_1,
-                                None,
-                                archive.file_name().as_bytes().to_vec()
-                            )]
+                            parameters: vec![DispositionParam::Filename(Charset::Iso_8859_1,
+                                                                        None,
+                                                                        archive.file_name()
+                                                                            .as_bytes()
+                                                                            .to_vec())],
                         };
                         response.headers.set(disp);
                         response.headers.set(XFileName(archive.file_name()));
@@ -1866,7 +1866,7 @@ mod test {
 
         iron_request(method::Post,
                                     format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064045?checksum={}", checksum).as_str(),
-                                    &mut body,
+                                    &mut body.clone(),
                                     Headers::new(),
                                     upload_broker);
 
@@ -1882,7 +1882,8 @@ mod test {
 
         //set the user agent to look like a windows download
         let mut headers = Headers::new();
-        headers.set(UserAgent("hab/0.20.0-dev/20170326090935 (x86_64-windows; 10.0.14915)".to_string()));
+        headers.set(UserAgent("hab/0.20.0-dev/20170326090935 (x86_64-windows; 10.0.14915)"
+                                  .to_string()));
 
         let (response, _) = iron_request(method::Get,
                                          "http://localhost/pkgs/core/cacerts/2017.01.17/20170209064045/download",
@@ -1899,9 +1900,12 @@ mod test {
                 Charset::Iso_8859_1,
                 None,
                 b"core-cacerts-2017.01.17-20170209064045-x86_64-windows.hart".to_vec()
-            )]
+            )],
         };
-        assert_eq!(response.headers.get::<ContentDisposition>(),
-                   Some(&disp));
+        assert_eq!(response.headers.get::<ContentDisposition>(), Some(&disp));
+
+        //assert file content
+        let result_body = response::extract_body_to_bytes(response);
+        assert_eq!(result_body, body);
     }
 }
