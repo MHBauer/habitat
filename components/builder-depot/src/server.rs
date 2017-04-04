@@ -33,6 +33,7 @@ use hab_net::http::controller::*;
 use hab_net::privilege;
 use hab_net::routing::{Broker, RouteResult};
 use hab_net::server::NetIdent;
+use hyper::header::{Charset, ContentDisposition, DispositionType, DispositionParam};
 use hyper::mime::{Mime, TopLevel, SubLevel, Attr, Value};
 use iron::{status, headers, typemap};
 use iron::headers::{ContentType, UserAgent};
@@ -904,11 +905,17 @@ fn download_package(req: &mut Request) -> IronResult<Response> {
             if let Some(archive) = depot.archive(&ident, &agent_target) {
                 match fs::metadata(&archive.path) {
                     Ok(_) => {
-                        let mut response = Response::with((status::Ok, archive.path.clone()));
+                        let mut response = Response::with(status::Ok);
                         do_cache_response(&mut response);
-                        response.headers
-                            .set(ContentDisposition(format!("attachment; filename=\"{}\"",
-                                                            archive.file_name())));
+                        let disp = ContentDisposition {
+                            disposition: DispositionType::Attachment,
+                            parameters: vec![DispositionParam::Filename(
+                                Charset::Iso_8859_1,
+                                None,
+                                archive.file_name().as_bytes().to_vec()
+                            )]
+                        };
+                        response.headers.set(disp);
                         response.headers.set(XFileName(archive.file_name()));
                         Ok(response)
                     }
@@ -1675,6 +1682,7 @@ mod test {
     use hyper;
     use hyper::net::NetworkStream;
     use hyper::buffer::BufReader;
+    use hyper::header::{Charset, ContentDisposition, DispositionType, DispositionParam};
 
     use hab_core::crypto::hash;
     use protocol::net::{self, ErrCode};
@@ -1852,12 +1860,12 @@ mod test {
         upload_broker.setup::<OriginPackageCreate, OriginPackage>(&OriginPackage::new());
 
         let mut body: Vec<u8> = Vec::new();
-        let path = hart_file("core-cacerts-2017.01.17-20170209064044-x86_64-windows.hart");
+        let path = hart_file("core-cacerts-2017.01.17-20170209064045-x86_64-windows.hart");
         File::open(&path).unwrap().read_to_end(&mut body).unwrap();
         let checksum = hash::hash_file(&path).unwrap();
 
         iron_request(method::Post,
-                                    format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044?checksum={}", checksum).as_str(),
+                                    format!("http://localhost/pkgs/core/cacerts/2017.01.17/20170209064045?checksum={}", checksum).as_str(),
                                     &mut body,
                                     Headers::new(),
                                     upload_broker);
@@ -1869,7 +1877,7 @@ mod test {
         ident.set_origin("core".to_string());
         ident.set_name("cacerts".to_string());
         ident.set_version("2017.01.17".to_string());
-        ident.set_release("20170209064044".to_string());
+        ident.set_release("20170209064045".to_string());
         download_broker.setup::<OriginPackageGet, OriginPackageIdent>(&ident);
 
         //set the user agent to look like a windows download
@@ -1877,13 +1885,23 @@ mod test {
         headers.set(UserAgent("hab/0.20.0-dev/20170326090935 (x86_64-windows; 10.0.14915)".to_string()));
 
         let (response, _) = iron_request(method::Get,
-                                         "http://localhost/pkgs/core/cacerts/2017.01.17/20170209064044/download",
+                                         "http://localhost/pkgs/core/cacerts/2017.01.17/20170209064045/download",
                                          &mut Vec::new(),
                                          headers,
                                          download_broker);
 
-        //assert status
+        //assert headers
         let response = response.unwrap();
         assert_eq!(response.status, Some(status::Ok));
+        let disp = ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![DispositionParam::Filename(
+                Charset::Iso_8859_1,
+                None,
+                b"core-cacerts-2017.01.17-20170209064045-x86_64-windows.hart".to_vec()
+            )]
+        };
+        assert_eq!(response.headers.get::<ContentDisposition>(),
+                   Some(&disp));
     }
 }
