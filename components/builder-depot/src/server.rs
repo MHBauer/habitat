@@ -698,19 +698,16 @@ fn upload_package(req: &mut Request) -> IronResult<Response> {
 
     info!("File added to Depot at {}", filename.to_string_lossy());
     let mut archive = PackageArchive::new(filename);
-    let object = match depotsrv::Package::from_archive(&mut archive) {
-        Ok(object) => object,
+    let mut package = match OriginPackageCreate::from_archive(&mut archive) {
+        Ok(package) => package,
         Err(e) => {
             info!("Error building package from archive: {:#?}", e);
             return Ok(Response::with(status::UnprocessableEntity));
         }
     };
-    if ident.satisfies(object.get_ident()) {
-        let mut package_req = OriginPackageCreate::new();
-        package_req.set_owner_id(session.get_id());
-        package_req.set_ident(ident.clone());
-        package_req.set_target(target_from_artifact.to_string());
-        route_message::<OriginPackageCreate, OriginPackage>(req, &package_req).unwrap();
+    if ident.satisfies(package.get_ident()) {
+        package.set_owner_id(session.get_id());
+        route_message::<OriginPackageCreate, OriginPackage>(req, &package).unwrap();
 
         log_event!(req,
                    Event::PackageUpload {
@@ -747,15 +744,15 @@ fn upload_package(req: &mut Request) -> IronResult<Response> {
         }
 
         let mut response = Response::with((status::Created,
-                                           format!("/pkgs/{}/download", object.get_ident())));
+                                           format!("/pkgs/{}/download", package.get_ident())));
         let mut base_url: url::Url = req.url.clone().into();
-        base_url.set_path(&format!("pkgs/{}/download", object.get_ident()));
+        base_url.set_path(&format!("pkgs/{}/download", package.get_ident()));
         response.headers.set(headers::Location(format!("{}", base_url)));
         Ok(response)
     } else {
         info!("Ident mismatch, expected={:?}, got={:?}",
               ident,
-              object.get_ident());
+              package.get_ident());
         Ok(Response::with(status::UnprocessableEntity))
     }
 }
@@ -1073,7 +1070,7 @@ fn list_packages(req: &mut Request) -> IronResult<Response> {
 
     // let's make sure this origin actually exists
     match try!(get_origin(req, &origin)) {
-        Some(mut origin) => {
+        Some(origin) => {
             request.set_origin_id(origin.get_id());
         }
         None => return Ok(Response::with(status::NotFound)),
@@ -1243,7 +1240,7 @@ fn delete_channel(req: &mut Request) -> IronResult<Response> {
 
 fn show_package(req: &mut Request) -> IronResult<Response> {
     let mut request = OriginPackageGet::new();
-    let (origin, mut ident, channel) = {
+    let (origin, ident, channel) = {
         let params = req.extensions.get::<Router>().unwrap();
 
         let origin = match params.find("origin") {

@@ -8,7 +8,7 @@ use std::fmt;
 use std::result;
 
 use hab_core;
-use hab_core::package::Identifiable;
+use hab_core::package::{Identifiable, FromArchive, PackageArchive};
 
 use serde::{Serialize, Serializer};
 use serde::ser::SerializeStruct;
@@ -444,18 +444,18 @@ impl Into<hab_core::package::PackageIdent> for OriginPackageIdent {
 }
 
 impl Routable for OriginPackageGet {
-    type H = InstaId;
+    type H = String;
 
     fn route_key(&self) -> Option<Self::H> {
-        Some(InstaId(self.get_owner_id()))
+        Some(String::from(self.get_ident().get_origin()))
     }
 }
 
 impl Routable for OriginPackageCreate {
-    type H = InstaId;
+    type H = String;
 
     fn route_key(&self) -> Option<Self::H> {
-        Some(InstaId(self.get_owner_id()))
+        Some(String::from(self.get_ident().get_origin()))
     }
 }
 
@@ -506,5 +506,51 @@ impl Serialize for OriginPackage {
         try!(strukt.serialize_field("exposes", self.get_exposes()));
         try!(strukt.serialize_field("config", self.get_config()));
         strukt.end()
+    }
+}
+
+impl From<hab_core::package::PackageIdent> for OriginPackageIdent {
+    fn from(value: hab_core::package::PackageIdent) -> OriginPackageIdent {
+        let mut ident = OriginPackageIdent::new();
+        ident.set_origin(value.origin);
+        ident.set_name(value.name);
+        if let Some(ver) = value.version {
+            ident.set_version(ver);
+        }
+        if let Some(rel) = value.release {
+            ident.set_release(rel);
+        }
+        ident
+    }
+}
+
+impl FromArchive for OriginPackageCreate {
+    type Error = hab_core::Error;
+
+    fn from_archive(archive: &mut PackageArchive) -> hab_core::Result<Self> {
+        let ident = match archive.ident() {
+            Ok(value) => OriginPackageIdent::from(value),
+            Err(e) => return Err(hab_core::Error::from(e)),
+        };
+        let manifest = try!(archive.manifest());
+        let deps = try!(archive.deps()).into_iter().map(|d| d.into()).collect();
+        let tdeps = try!(archive.tdeps()).into_iter().map(|d| d.into()).collect();
+        let exposes = try!(archive.exposes()).into_iter().map(|d| d as u32).collect();
+        let config = try!(archive.config());
+        let checksum = try!(archive.checksum());
+        let target = try!(archive.target());
+
+        let mut package = OriginPackageCreate::new();
+        package.set_ident(ident);
+        package.set_manifest(manifest);
+        package.set_target(target.to_string());
+        package.set_deps(deps);
+        package.set_tdeps(tdeps);
+        package.set_exposes(exposes);
+        if let Some(cfg) = config {
+            package.set_config(cfg);
+        }
+        package.set_checksum(checksum);
+        Ok(package)
     }
 }

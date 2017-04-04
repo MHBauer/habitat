@@ -216,7 +216,13 @@ message OriginPackageIdent {
 message OriginPackageCreate {
   optional uint64 owner_id = 1;
   optional OriginPackageIdent ident = 2;
-  optional string target = 3;
+  optional string checksum = 3;
+  optional string manifest = 4;
+  repeated OriginPackageIdent deps = 5;
+  repeated OriginPackageIdent tdeps = 6;
+  repeated uint32 exposes = 7 [packed=true];
+  optional string config = 8;
+  optional string target = 9;
 }
 
 message OriginPackage {
