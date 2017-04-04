@@ -437,9 +437,9 @@ impl fmt::Display for OriginPackageIdent {
 impl Into<hab_core::package::PackageIdent> for OriginPackageIdent {
     fn into(self) -> hab_core::package::PackageIdent {
         hab_core::package::PackageIdent::new(self.get_origin(),
-                                   self.get_name(),
-                                   Some(self.get_version()),
-                                   Some(self.get_release()))
+                                             self.get_name(),
+                                             Some(self.get_version()),
+                                             Some(self.get_release()))
     }
 }
 
@@ -467,6 +467,14 @@ impl Routable for OriginPackageUniqueListRequest {
     }
 }
 
+impl Routable for OriginPackageListRequest {
+    type H = InstaId;
+
+    fn route_key(&self) -> Option<Self::H> {
+        Some(InstaId(self.get_origin_id()))
+    }
+}
+
 impl Serialize for OriginPackageIdent {
     fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
         where S: Serializer
@@ -480,6 +488,17 @@ impl Serialize for OriginPackageIdent {
         if !self.get_release().is_empty() {
             try!(strukt.serialize_field("release", self.get_release()));
         }
+        strukt.end()
+    }
+}
+
+impl Serialize for OriginPackage {
+    fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut strukt = try!(serializer.serialize_struct("origin_package", 8));
+        try!(strukt.serialize_field("ident", self.get_ident()));
+        try!(strukt.serialize_field("target", self.get_target()));
         strukt.end()
     }
 }

@@ -988,8 +988,6 @@ fn list_origin_keys(req: &mut Request) -> IronResult<Response> {
 }
 
 fn list_unique_packages(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<DepotUtil>>().expect("depot not found");
-    let depot = lock.read().expect("depot read lock is poisoned");
     let mut request = OriginPackageUniqueListRequest::new();
     let (start, stop) = match extract_pagination(req) {
         Ok(range) => range,
@@ -1005,15 +1003,20 @@ fn list_unique_packages(req: &mut Request) -> IronResult<Response> {
         }
     };
 
-    match route_message::<OriginPackageUniqueListRequest, OriginPackageUniqueListResponse>(req, &request) {
+    match route_message::<OriginPackageUniqueListRequest,
+                          OriginPackageUniqueListResponse>(req, &request) {
         Ok(packages) => {
             debug!("list_unique_packages start: {}, stop: {}, total count: {}",
                    packages.get_start(),
                    packages.get_stop(),
                    packages.get_count());
-            let body = package_results_json(&packages.get_idents().to_vec(), packages.get_count() as isize, packages.get_start() as isize, packages.get_stop() as isize);
+            let body = package_results_json(&packages.get_idents().to_vec(),
+                                            packages.get_count() as isize,
+                                            packages.get_start() as isize,
+                                            packages.get_stop() as isize);
 
-            let mut response = if packages.get_count() as isize > (packages.get_stop() as isize + 1) {
+            let mut response = if packages.get_count() as isize >
+                                  (packages.get_stop() as isize + 1) {
                 Response::with((status::PartialContent, body))
             } else {
                 Response::with((status::Ok, body))
@@ -1029,7 +1032,7 @@ fn list_unique_packages(req: &mut Request) -> IronResult<Response> {
             match err.get_code() {
                 ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
                 _ => {
-                    error!("list_packages:2, err={:?}", err);
+                    error!("list_unique_packages:2, err={:?}", err);
                     Ok(Response::with(status::InternalServerError))
                 }
             }
@@ -1038,12 +1041,13 @@ fn list_unique_packages(req: &mut Request) -> IronResult<Response> {
 }
 
 fn list_packages(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
-    let mut depot = lock.write().expect("depot read lock is poisoned");
+    let mut request = OriginPackageListRequest::new();
     let (start, stop) = match extract_pagination(req) {
         Ok(range) => range,
         Err(response) => return Ok(response),
     };
+    request.set_start(start as u64);
+    request.set_stop(stop as u64);
 
     let (origin, ident, channel) = {
         let params = req.extensions.get::<Router>().unwrap();
@@ -1068,12 +1072,18 @@ fn list_packages(req: &mut Request) -> IronResult<Response> {
     };
 
     // let's make sure this origin actually exists
-    if try!(get_origin(req, &origin)).is_none() {
-        return Ok(Response::with(status::NotFound));
-    }
+    match try!(get_origin(req, &origin)) {
+        Some(mut origin) => {
+            request.set_origin_id(origin.get_id());
+        }
+        None => return Ok(Response::with(status::NotFound)),
+    };
 
     match channel {
         Some(channel) => {
+            let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
+            let mut depot = lock.write().expect("depot read lock is poisoned");
+
             // let's make sure this channel actually exists
             if !depot.datastore.channels.channel_exists(&origin, &channel) {
                 return Ok(Response::with(status::NotFound));
@@ -1098,23 +1108,20 @@ fn list_packages(req: &mut Request) -> IronResult<Response> {
             Ok(response)
         }
         None => {
-            match depot.datastore
-                      .packages
-                      .index
-                      .list(&ident, start, stop) {
+            match route_message::<OriginPackageListRequest, OriginPackageListResponse>(req,
+                                                                                       &request) {
                 Ok(packages) => {
-                    let count = depot.datastore
-                        .packages
-                        .index
-                        .count(&ident)
-                        .unwrap();
                     debug!("list_packages start: {}, stop: {}, total count: {}",
-                           start,
-                           stop,
-                           count);
-                    let body = package_results_json(&packages, count as isize, start, stop);
+                           packages.get_start(),
+                           packages.get_stop(),
+                           packages.get_count());
+                    let body = package_results_json(&packages.get_idents().to_vec(),
+                                                    packages.get_count() as isize,
+                                                    packages.get_start() as isize,
+                                                    packages.get_stop() as isize);
 
-                    let mut response = if count as isize > (stop + 1) {
+                    let mut response = if packages.get_count() as isize >
+                                          (packages.get_stop() as isize + 1) {
                         Response::with((status::PartialContent, body))
                     } else {
                         Response::with((status::Ok, body))
@@ -1126,12 +1133,14 @@ fn list_packages(req: &mut Request) -> IronResult<Response> {
                     dont_cache_response(&mut response);
                     Ok(response)
                 }
-                Err(Error::DataStore(dbcache::Error::EntityNotFound)) => {
-                    Ok(Response::with((status::NotFound)))
-                }
-                Err(e) => {
-                    error!("list_packages:2, err={:?}", e);
-                    Ok(Response::with(status::InternalServerError))
+                Err(err) => {
+                    match err.get_code() {
+                        ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                        _ => {
+                            error!("list_packages:2, err={:?}", err);
+                            Ok(Response::with(status::InternalServerError))
+                        }
+                    }
                 }
             }
         }
@@ -1932,11 +1941,15 @@ mod test {
         broker.setup::<OriginPackageUniqueListRequest, OriginPackageUniqueListResponse>(&pkg_res);
 
         let (response, msgs) = iron_request(method::Get,
-                                         "http://localhost/org/pkgs?range=2",
-                                         &mut Vec::new(),
-                                         Headers::new(),
-                                         broker);
-        let result_body = response::extract_body_to_string(response.unwrap());
+                                            "http://localhost/org/pkgs?range=2",
+                                            &mut Vec::new(),
+                                            Headers::new(),
+                                            broker);
+
+        let response = response.unwrap();
+        assert_eq!(response.status, Some(status::Ok));
+
+        let result_body = response::extract_body_to_string(response);
 
         assert_eq!(result_body,
                    "{\
@@ -1957,6 +1970,75 @@ mod test {
 
         //assert we sent the corect range to postgres
         let package_req = msgs.get::<OriginPackageUniqueListRequest>().unwrap();
+        assert_eq!(package_req.get_start(), 2);
+        assert_eq!(package_req.get_stop(), 51);
+    }
+
+    #[test]
+    fn list_packages() {
+        let mut broker: TestableBroker = Default::default();
+
+        let mut origin_res = Origin::new();
+        origin_res.set_id(5000);
+        broker.setup::<OriginGet, Origin>(&origin_res);
+
+        let mut pkg_res = OriginPackageListResponse::new();
+        pkg_res.set_start(0);
+        pkg_res.set_stop(1);
+        pkg_res.set_count(2);
+        let mut packages = protobuf::RepeatedField::new();
+
+        let mut ident1 = OriginPackageIdent::new();
+        ident1.set_origin("org".to_string());
+        ident1.set_name("name1".to_string());
+        ident1.set_version("1.1.1".to_string());
+        ident1.set_release("20170101010101".to_string());
+        packages.push(ident1);
+
+        let mut ident2 = OriginPackageIdent::new();
+        ident2.set_origin("org".to_string());
+        ident2.set_name("name2".to_string());
+        ident2.set_version("2.2.2".to_string());
+        ident2.set_release("20170202020202".to_string());
+        packages.push(ident2);
+
+        pkg_res.set_idents(packages);
+        broker.setup::<OriginPackageListRequest, OriginPackageListResponse>(&pkg_res);
+
+        let (response, msgs) = iron_request(method::Get,
+                                            "http://localhost/pkgs/org?range=2",
+                                            &mut Vec::new(),
+                                            Headers::new(),
+                                            broker);
+
+        let response = response.unwrap();
+        assert_eq!(response.status, Some(status::Ok));
+
+        let result_body = response::extract_body_to_string(response);
+
+        assert_eq!(result_body,
+                   "{\
+            \"range_start\":0,\
+            \"range_end\":1,\
+            \"total_count\":2,\
+            \"package_list\":[\
+                {\
+                    \"origin\":\"org\",\
+                    \"name\":\"name1\",\
+                    \"version\":\"1.1.1\",\
+                    \"release\":\"20170101010101\"\
+                },\
+                {\
+                    \"origin\":\"org\",\
+                    \"name\":\"name2\",\
+                    \"version\":\"2.2.2\",\
+                    \"release\":\"20170202020202\"\
+                }\
+            ]\
+        }");
+
+        //assert we sent the corect range to postgres
+        let package_req = msgs.get::<OriginPackageListRequest>().unwrap();
         assert_eq!(package_req.get_start(), 2);
         assert_eq!(package_req.get_stop(), 51);
     }
