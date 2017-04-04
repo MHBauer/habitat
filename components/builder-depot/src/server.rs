@@ -988,35 +988,32 @@ fn list_origin_keys(req: &mut Request) -> IronResult<Response> {
 }
 
 fn list_unique_packages(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
+    let lock = req.get::<persistent::State<DepotUtil>>().expect("depot not found");
     let depot = lock.read().expect("depot read lock is poisoned");
+    let mut request = OriginPackageUniqueListRequest::new();
     let (start, stop) = match extract_pagination(req) {
         Ok(range) => range,
         Err(response) => return Ok(response),
     };
-    let params = req.extensions.get::<Router>().unwrap();
-    let ident: String = match params.find("origin") {
-        Some(origin) => origin.to_string(),
-        None => return Ok(Response::with(status::BadRequest)),
+    request.set_start(start as u64);
+    request.set_stop(stop as u64);
+    {
+        let params = req.extensions.get::<Router>().unwrap();
+        match params.find("origin") {
+            Some(origin) => request.set_origin(origin.to_string()),
+            None => return Ok(Response::with(status::BadRequest)),
+        }
     };
 
-    match depot.datastore
-              .packages
-              .index
-              .unique(&ident, start, stop) {
+    match route_message::<OriginPackageUniqueListRequest, OriginPackageUniqueListResponse>(req, &request) {
         Ok(packages) => {
-            let count = depot.datastore
-                .packages
-                .index
-                .count_unique(&ident)
-                .unwrap();
             debug!("list_unique_packages start: {}, stop: {}, total count: {}",
-                   start,
-                   stop,
-                   count);
-            let body = package_results_json(&packages, count as isize, start, stop);
+                   packages.get_start(),
+                   packages.get_stop(),
+                   packages.get_count());
+            let body = package_results_json(&packages.get_idents().to_vec(), packages.get_count() as isize, packages.get_start() as isize, packages.get_stop() as isize);
 
-            let mut response = if count as isize > (stop + 1) {
+            let mut response = if packages.get_count() as isize > (packages.get_stop() as isize + 1) {
                 Response::with((status::PartialContent, body))
             } else {
                 Response::with((status::Ok, body))
@@ -1028,12 +1025,14 @@ fn list_unique_packages(req: &mut Request) -> IronResult<Response> {
             dont_cache_response(&mut response);
             Ok(response)
         }
-        Err(Error::DataStore(dbcache::Error::EntityNotFound)) => {
-            Ok(Response::with((status::NotFound)))
-        }
-        Err(e) => {
-            error!("list_packages:2, err={:?}", e);
-            Ok(Response::with(status::InternalServerError))
+        Err(err) => {
+            match err.get_code() {
+                ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                _ => {
+                    error!("list_packages:2, err={:?}", err);
+                    Ok(Response::with(status::InternalServerError))
+                }
+            }
         }
     }
 }
@@ -1932,8 +1931,8 @@ mod test {
         pkg_res.set_idents(idents);
         broker.setup::<OriginPackageUniqueListRequest, OriginPackageUniqueListResponse>(&pkg_res);
 
-        let (response, _) = iron_request(method::Get,
-                                         "http://localhost/org/pkgs",
+        let (response, msgs) = iron_request(method::Get,
+                                         "http://localhost/org/pkgs?range=2",
                                          &mut Vec::new(),
                                          Headers::new(),
                                          broker);
@@ -1941,10 +1940,10 @@ mod test {
 
         assert_eq!(result_body,
                    "{\
-            range_start: 0,\
-            range_end: 1,\
-            total_count: 2,\
-            package_list: [\
+            \"range_start\":0,\
+            \"range_end\":1,\
+            \"total_count\":2,\
+            \"package_list\":[\
                 {\
                     \"origin\":\"org\",\
                     \"name\":\"name1\"\
@@ -1955,5 +1954,10 @@ mod test {
                 }\
             ]\
         }");
+
+        //assert we sent the corect range to postgres
+        let package_req = msgs.get::<OriginPackageUniqueListRequest>().unwrap();
+        assert_eq!(package_req.get_start(), 2);
+        assert_eq!(package_req.get_stop(), 51);
     }
 }

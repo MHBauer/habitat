@@ -460,9 +460,26 @@ impl Routable for OriginPackageCreate {
 }
 
 impl Routable for OriginPackageUniqueListRequest {
-    type H = InstaId;
+    type H = String;
 
     fn route_key(&self) -> Option<Self::H> {
-        Some(InstaId(self.get_origin_id()))
+        Some(String::from(self.get_origin()))
+    }
+}
+
+impl Serialize for OriginPackageIdent {
+    fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut strukt = try!(serializer.serialize_struct("origin_package_ident", 4));
+        try!(strukt.serialize_field("origin", self.get_origin()));
+        try!(strukt.serialize_field("name", self.get_name()));
+        if !self.get_version().is_empty() {
+            try!(strukt.serialize_field("version", self.get_version()));
+        }
+        if !self.get_release().is_empty() {
+            try!(strukt.serialize_field("release", self.get_release()));
+        }
+        strukt.end()
     }
 }

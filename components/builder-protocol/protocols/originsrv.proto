@@ -242,19 +242,16 @@ message OriginPackageListResponse {
 }
 
 message OriginPackageUniqueListRequest {
-  optional uint64 owner_id = 1;
-  optional uint64 origin_id = 2;
-  optional uint64 start = 3;
-  optional uint64 stop = 4;
+  optional string origin = 1;
+  optional uint64 start = 2;
+  optional uint64 stop = 3;
 }
 
 message OriginPackageUniqueListResponse {
-  optional uint64 owner_id = 1;
-  optional uint64 origin_id = 2;
-  optional uint64 start = 3;
-  optional uint64 stop = 4;
-  optional uint64 count = 5;
-  repeated OriginPackageIdent idents = 6;
+  optional uint64 start = 2;
+  optional uint64 stop = 3;
+  optional uint64 count = 4;
+  repeated OriginPackageIdent idents = 5;
 }
 
 message OriginKeyIdent {
