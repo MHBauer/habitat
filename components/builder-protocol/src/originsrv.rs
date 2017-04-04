@@ -498,7 +498,13 @@ impl Serialize for OriginPackage {
     {
         let mut strukt = try!(serializer.serialize_struct("origin_package", 8));
         try!(strukt.serialize_field("ident", self.get_ident()));
+        try!(strukt.serialize_field("checksum", self.get_checksum()));
+        try!(strukt.serialize_field("manifest", self.get_manifest()));
         try!(strukt.serialize_field("target", self.get_target()));
+        try!(strukt.serialize_field("deps", self.get_deps()));
+        try!(strukt.serialize_field("tdeps", self.get_tdeps()));
+        try!(strukt.serialize_field("exposes", self.get_exposes()));
+        try!(strukt.serialize_field("config", self.get_config()));
         strukt.end()
     }
 }

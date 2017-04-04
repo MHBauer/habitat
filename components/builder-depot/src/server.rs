@@ -1242,9 +1242,7 @@ fn delete_channel(req: &mut Request) -> IronResult<Response> {
 }
 
 fn show_package(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
-    let mut depot = lock.write().expect("depot read lock is poisoned");
-
+    let mut request = OriginPackageGet::new();
     let (origin, mut ident, channel) = {
         let params = req.extensions.get::<Router>().unwrap();
 
@@ -1254,6 +1252,7 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
         };
 
         let ident = ident_from_params(params);
+        request.set_ident(origin_ident_from_params(params));
 
         let channel = match params.find("channel") {
             Some(ch) => Some(ch.to_owned()),
@@ -1269,6 +1268,8 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
     }
 
     if let Some(channel) = channel {
+        let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
+        let mut depot = lock.write().expect("depot read lock is poisoned");
         // let's make sure this channel actually exists
         if !depot.datastore.channels.channel_exists(&origin, &channel) {
             return Ok(Response::with(status::NotFound));
@@ -1304,38 +1305,42 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
             }
         }
     } else {
-        if !ident.fully_qualified() {
-            let agent_target = target_from_headers(&req.headers.get::<UserAgent>().unwrap())
-                .unwrap();
-            match depot.datastore
-                      .packages
-                      .index
-                      .latest(&ident, &agent_target.to_string()) {
-                Ok(id) => ident = id.into(),
-                Err(Error::DataStore(dbcache::Error::EntityNotFound)) => {
-                    return Ok(Response::with(status::NotFound));
-                }
-                Err(e) => {
-                    error!("show_package:5, err={:?}", e);
-                    return Ok(Response::with(status::InternalServerError));
-                }
-            }
-        }
+        // if !request.get_ident().fully_qualified() {
+        //     let agent_target = target_from_headers(&req.headers.get::<UserAgent>().unwrap())
+        //         .unwrap();
+        //     match depot.datastore
+        //               .packages
+        //               .index
+        //               .latest(&ident, &agent_target.to_string()) {
+        //         Ok(id) => ident = id.into(),
+        //         Err(Error::DataStore(dbcache::Error::EntityNotFound)) => {
+        //             return Ok(Response::with(status::NotFound));
+        //         }
+        //         Err(e) => {
+        //             error!("show_package:5, err={:?}", e);
+        //             return Ok(Response::with(status::InternalServerError));
+        //         }
+        //     }
+        // }
 
-        match depot.datastore.packages.find(&ident) {
+        match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
             Ok(pkg) => {
                 // If the request was for a fully qualified ident, cache the response, otherwise do
                 // not cache
-                if ident.fully_qualified() {
-                    render_package(&pkg, true)
+                if request.get_ident().fully_qualified() {
+                    render_origin_package(&pkg, true)
                 } else {
-                    render_package(&pkg, false)
+                    render_origin_package(&pkg, false)
                 }
             }
-            Err(dbcache::Error::EntityNotFound) => Ok(Response::with(status::NotFound)),
-            Err(e) => {
-                error!("show_package:6, err={:?}", e);
-                Ok(Response::with(status::InternalServerError))
+            Err(err) => {
+                match err.get_code() {
+                    ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                    _ => {
+                        error!("show_package:6, err={:?}", err);
+                        Ok(Response::with(status::InternalServerError))
+                    }
+                }
             }
         }
     }
@@ -1385,6 +1390,21 @@ fn search_packages(req: &mut Request) -> IronResult<Response> {
 }
 
 fn render_package(pkg: &depotsrv::Package, should_cache: bool) -> IronResult<Response> {
+    let body = serde_json::to_string(&pkg).unwrap();
+    let mut response = Response::with((status::Ok, body));
+    response.headers.set(ETag(pkg.get_checksum().to_string()));
+    response.headers.set(ContentType(Mime(TopLevel::Application,
+                                          SubLevel::Json,
+                                          vec![(Attr::Charset, Value::Utf8)])));
+    if should_cache {
+        do_cache_response(&mut response);
+    } else {
+        dont_cache_response(&mut response);
+    }
+    Ok(response)
+}
+
+fn render_origin_package(pkg: &OriginPackage, should_cache: bool) -> IronResult<Response> {
     let body = serde_json::to_string(&pkg).unwrap();
     let mut response = Response::with((status::Ok, body));
     response.headers.set(ETag(pkg.get_checksum().to_string()));
@@ -2041,5 +2061,89 @@ mod test {
         let package_req = msgs.get::<OriginPackageListRequest>().unwrap();
         assert_eq!(package_req.get_start(), 2);
         assert_eq!(package_req.get_stop(), 51);
+    }
+
+    #[test]
+    fn show_package_fully_qualified() {
+        let mut show_broker: TestableBroker = Default::default();
+
+        //setup our package db request
+        let mut ident = OriginPackageIdent::new();
+        ident.set_origin("org".to_string());
+        ident.set_name("name".to_string());
+        ident.set_version("1.1.1".to_string());
+        ident.set_release("20170101010101".to_string());
+
+        let mut dep_idents = protobuf::RepeatedField::new();
+        let mut dep_ident = OriginPackageIdent::new();
+        dep_ident.set_origin("dep_org".to_string());
+        dep_ident.set_name("dep_name".to_string());
+        dep_ident.set_version("1.1.1-dep".to_string());
+        dep_ident.set_release("20170101010102".to_string());
+        dep_idents.push(dep_ident);
+
+        let mut tdep_idents = protobuf::RepeatedField::new();
+        let mut tdep_ident = OriginPackageIdent::new();
+        tdep_ident.set_origin("tdep_org".to_string());
+        tdep_ident.set_name("tdep_name".to_string());
+        tdep_ident.set_version("1.1.1-tdep".to_string());
+        tdep_ident.set_release("20170101010103".to_string());
+        tdep_idents.push(tdep_ident);
+
+        let mut package = OriginPackage::new();
+        package.set_ident(ident.clone());
+        package.set_checksum("checksum".to_string());
+        package.set_manifest("manifest".to_string());
+        package.set_deps(dep_idents);
+        package.set_tdeps(tdep_idents);
+        package.set_config("config".to_string());
+        package.set_target("x86_64-linux".to_string());
+
+        show_broker.setup::<OriginPackageGet, OriginPackage>(&package);
+
+        let mut origin_res = Origin::new();
+        origin_res.set_id(5000);
+        show_broker.setup::<OriginGet, Origin>(&origin_res);
+
+        let (response, msgs) = iron_request(method::Get,
+                                            "http://localhost/pkgs/org/name/1.1.1/20170101010101",
+                                            &mut Vec::new(),
+                                            Headers::new(),
+                                            show_broker);
+
+        let response = response.unwrap();
+        assert_eq!(response.status, Some(status::Ok));
+
+        let result_body = response::extract_body_to_string(response);
+        assert_eq!(result_body,
+                   "{\
+            \"ident\":{\
+                \"origin\":\"org\",\
+                \"name\":\"name\",\
+                \"version\":\"1.1.1\",\
+                \"release\":\"20170101010101\"\
+            },\
+            \"checksum\":\"checksum\",\
+            \"manifest\":\"manifest\",\
+            \"target\":\"x86_64-linux\",\
+            \"deps\":[{\
+                \"origin\":\"dep_org\",\
+                \"name\":\"dep_name\",\
+                \"version\":\"1.1.1-dep\",\
+                \"release\":\"20170101010102\"\
+            }],\
+            \"tdeps\":[{\
+                \"origin\":\"tdep_org\",\
+                \"name\":\"tdep_name\",\
+                \"version\":\"1.1.1-tdep\",\
+                \"release\":\"20170101010103\"\
+            }],\
+            \"exposes\":[],\
+            \"config\":\"config\"\
+        }");
+
+        //assert we sent the corect range to postgres
+        let package_req = msgs.get::<OriginPackageGet>().unwrap();
+        assert_eq!(package_req.get_ident().to_string(), ident.to_string());
     }
 }
