@@ -135,7 +135,7 @@ matrix:
         - ./support/ci/compile_zmq.sh
         - ./support/ci/install_rustfmt.sh
         - sudo mkdir -p /hab/svc/builder-depot
-        - sudo 777 -R /hab/svc/builder-depot
+        - sudo chmod 777 -R /hab/svc/builder-depot
       script:
         - ./support/ci/rust_tests.sh
         - ./support/ci/lint.sh
