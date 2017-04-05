@@ -16,7 +16,6 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use dbcache::BasicSet;
 use hab_core;
 use hab_core::package::{FromArchive, PackageArchive};
 use protocol::depotsrv;

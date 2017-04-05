@@ -14,19 +14,16 @@
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
-use std::fmt;
 use std::ops::Deref;
-use std::result;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use dbcache::{self, ConnectionPool, Bucket, BasicSet, IndexSet};
 use hab_core::package::{self, Identifiable};
-use protobuf::Message;
 use protocol::depotsrv;
 use protocol::originsrv;
 use r2d2_redis::RedisConnectionManager;
-use redis::{self, Commands, Pipeline, PipelineCommands};
+use redis::{self, Commands};
 
 use error::{Error, Result};
 

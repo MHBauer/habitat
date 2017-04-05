@@ -22,7 +22,6 @@ use std::str::FromStr;
 
 use uuid::Uuid;
 use bodyparser;
-use dbcache::{self, BasicSet};
 use hab_core::package::{Identifiable, FromArchive, PackageArchive, PackageTarget};
 use hab_core::crypto::keys::{self, PairType};
 use hab_core::crypto::SigKeyPair;
@@ -589,7 +588,7 @@ fn upload_package(req: &mut Request) -> IronResult<Response> {
     };
     let ident = {
         let params = req.extensions.get::<Router>().unwrap();
-        origin_ident_from_params(params)
+        ident_from_params(params)
     };
 
     if !ident.valid() {
@@ -888,7 +887,7 @@ fn download_package(req: &mut Request) -> IronResult<Response> {
     let mut ident_req = OriginPackageGet::new();
     {
         let params = req.extensions.get::<Router>().unwrap();
-        ident_req.set_ident(origin_ident_from_params(params));
+        ident_req.set_ident(ident_from_params(params));
     };
     let agent_target = target_from_headers(&req.headers.get::<UserAgent>().unwrap()).unwrap();
     if !depot.config.supported_targets.contains(&agent_target) {
@@ -1247,7 +1246,7 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
             _ => return Ok(Response::with(status::BadRequest)),
         };
 
-        let ident = origin_ident_from_params(params);
+        let ident = ident_from_params(params);
 
         let channel = match params.find("channel") {
             Some(ch) => Some(ch.to_owned()),
@@ -1281,9 +1280,9 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
                             // If the request was for a fully qualified ident, cache the response, otherwise do
                             // not cache
                             if qualified {
-                                render_origin_package(&pkg, true)
+                                render_package(&pkg, true)
                             } else {
-                                render_origin_package(&pkg, false)
+                                render_package(&pkg, false)
                             }
                         }
                         Err(err) => {
@@ -1305,7 +1304,7 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
                 let mut request = OriginPackageGet::new();
                 request.set_ident(ident);
                 match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
-                    Ok(pkg) => render_origin_package(&pkg, false),
+                    Ok(pkg) => render_package(&pkg, false),
                     Err(err) => {
                         match err.get_code() {
                             ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
@@ -1348,9 +1347,9 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
                 // If the request was for a fully qualified ident, cache the response, otherwise do
                 // not cache
                 if qualified {
-                    render_origin_package(&pkg, true)
+                    render_package(&pkg, true)
                 } else {
-                    render_origin_package(&pkg, false)
+                    render_package(&pkg, false)
                 }
             }
             Err(err) => {
@@ -1420,22 +1419,7 @@ fn search_packages(req: &mut Request) -> IronResult<Response> {
     }
 }
 
-fn render_package(pkg: &depotsrv::Package, should_cache: bool) -> IronResult<Response> {
-    let body = serde_json::to_string(&pkg).unwrap();
-    let mut response = Response::with((status::Ok, body));
-    response.headers.set(ETag(pkg.get_checksum().to_string()));
-    response.headers.set(ContentType(Mime(TopLevel::Application,
-                                          SubLevel::Json,
-                                          vec![(Attr::Charset, Value::Utf8)])));
-    if should_cache {
-        do_cache_response(&mut response);
-    } else {
-        dont_cache_response(&mut response);
-    }
-    Ok(response)
-}
-
-fn render_origin_package(pkg: &OriginPackage, should_cache: bool) -> IronResult<Response> {
+fn render_package(pkg: &OriginPackage, should_cache: bool) -> IronResult<Response> {
     let body = serde_json::to_string(&pkg).unwrap();
     let mut response = Response::with((status::Ok, body));
     response.headers.set(ETag(pkg.get_checksum().to_string()));
@@ -1527,20 +1511,7 @@ fn promote_package(req: &mut Request) -> IronResult<Response> {
     }
 }
 
-fn ident_from_params(params: &Params) -> depotsrv::PackageIdent {
-    let mut ident = depotsrv::PackageIdent::new();
-    ident.set_origin(params.find("origin").unwrap().to_string());
-    ident.set_name(params.find("pkg").unwrap().to_string());
-    if let Some(ver) = params.find("version") {
-        ident.set_version(ver.to_string());
-    }
-    if let Some(rel) = params.find("release") {
-        ident.set_release(rel.to_string());
-    }
-    ident
-}
-
-fn origin_ident_from_params(params: &Params) -> OriginPackageIdent {
+fn ident_from_params(params: &Params) -> OriginPackageIdent {
     let mut ident = OriginPackageIdent::new();
     ident.set_origin(params.find("origin").unwrap().to_string());
     ident.set_name(params.find("pkg").unwrap().to_string());
