@@ -1239,8 +1239,7 @@ fn delete_channel(req: &mut Request) -> IronResult<Response> {
 }
 
 fn show_package(req: &mut Request) -> IronResult<Response> {
-    let mut request = OriginPackageGet::new();
-    let (origin, ident, channel) = {
+    let (origin, ident, mut origin_ident, channel) = {
         let params = req.extensions.get::<Router>().unwrap();
 
         let origin = match params.find("origin") {
@@ -1249,14 +1248,14 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
         };
 
         let ident = ident_from_params(params);
-        request.set_ident(origin_ident_from_params(params));
+        let origin_ident = origin_ident_from_params(params);
 
         let channel = match params.find("channel") {
             Some(ch) => Some(ch.to_owned()),
             None => None,
         };
 
-        (origin, ident, channel)
+        (origin, ident, origin_ident, channel)
     };
 
     // let's make sure this origin actually exists
@@ -1302,24 +1301,28 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
             }
         }
     } else {
-        // if !request.get_ident().fully_qualified() {
-        //     let agent_target = target_from_headers(&req.headers.get::<UserAgent>().unwrap())
-        //         .unwrap();
-        //     match depot.datastore
-        //               .packages
-        //               .index
-        //               .latest(&ident, &agent_target.to_string()) {
-        //         Ok(id) => ident = id.into(),
-        //         Err(Error::DataStore(dbcache::Error::EntityNotFound)) => {
-        //             return Ok(Response::with(status::NotFound));
-        //         }
-        //         Err(e) => {
-        //             error!("show_package:5, err={:?}", e);
-        //             return Ok(Response::with(status::InternalServerError));
-        //         }
-        //     }
-        // }
+        if !origin_ident.fully_qualified() {
+            let mut request = OriginPackageLatestGet::new();
+            request.set_ident(origin_ident);
+            request.set_target(target_from_headers(&req.headers.get::<UserAgent>().unwrap())
+                                   .unwrap()
+                                   .to_string());
+            match route_message::<OriginPackageLatestGet, OriginPackageIdent>(req, &request) {
+                Ok(id) => origin_ident = id.into(),
+                Err(err) => {
+                    match err.get_code() {
+                        ErrCode::ENTITY_NOT_FOUND => return Ok(Response::with((status::NotFound))),
+                        _ => {
+                            error!("show_package:5, err={:?}", err);
+                            return Ok(Response::with(status::InternalServerError));
+                        }
+                    }
+                }
+            }
+        }
 
+        let mut request = OriginPackageGet::new();
+        request.set_ident(origin_ident);
         match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
             Ok(pkg) => {
                 // If the request was for a fully qualified ident, cache the response, otherwise do
@@ -2140,6 +2143,105 @@ mod test {
         }");
 
         //assert we sent the corect range to postgres
+        let package_req = msgs.get::<OriginPackageGet>().unwrap();
+        assert_eq!(package_req.get_ident().to_string(), ident.to_string());
+    }
+
+    #[test]
+    fn show_package_latest() {
+        let mut show_broker: TestableBroker = Default::default();
+
+        //setup our full package
+        let mut ident = OriginPackageIdent::new();
+        ident.set_origin("org".to_string());
+        ident.set_name("name".to_string());
+        ident.set_version("1.1.1".to_string());
+        ident.set_release("20170101010101".to_string());
+
+        let mut dep_idents = protobuf::RepeatedField::new();
+        let mut dep_ident = OriginPackageIdent::new();
+        dep_ident.set_origin("dep_org".to_string());
+        dep_ident.set_name("dep_name".to_string());
+        dep_ident.set_version("1.1.1-dep".to_string());
+        dep_ident.set_release("20170101010102".to_string());
+        dep_idents.push(dep_ident);
+
+        let mut tdep_idents = protobuf::RepeatedField::new();
+        let mut tdep_ident = OriginPackageIdent::new();
+        tdep_ident.set_origin("tdep_org".to_string());
+        tdep_ident.set_name("tdep_name".to_string());
+        tdep_ident.set_version("1.1.1-tdep".to_string());
+        tdep_ident.set_release("20170101010103".to_string());
+        tdep_idents.push(tdep_ident);
+
+        let mut package = OriginPackage::new();
+        package.set_ident(ident.clone());
+        package.set_checksum("checksum".to_string());
+        package.set_manifest("manifest".to_string());
+        package.set_deps(dep_idents);
+        package.set_tdeps(tdep_idents);
+        package.set_config("config".to_string());
+        package.set_target("x86_64-linux".to_string());
+        show_broker.setup::<OriginPackageGet, OriginPackage>(&package);
+
+        //setup query for the latest ident
+        let mut latest_ident = OriginPackageIdent::new();
+        latest_ident.set_origin("org".to_string());
+        latest_ident.set_name("name".to_string());
+        latest_ident.set_version("1.1.1".to_string());
+        latest_ident.set_release("20170101010101".to_string());
+        show_broker.setup::<OriginPackageLatestGet, OriginPackageIdent>(&latest_ident);
+
+        //setup origin lookup
+        let mut origin_res = Origin::new();
+        origin_res.set_id(5000);
+        show_broker.setup::<OriginGet, Origin>(&origin_res);
+
+        //set the user agent to look like a linux download
+        let mut headers = Headers::new();
+        headers.set(UserAgent("hab/0.20.0-dev/20170326090935 (x86_64-linux; 9.9.9)".to_string()));
+        let (response, msgs) = iron_request(method::Get,
+                                            "http://localhost/pkgs/org/name/latest",
+                                            &mut Vec::new(),
+                                            headers,
+                                            show_broker);
+
+        let response = response.unwrap();
+        assert_eq!(response.status, Some(status::Ok));
+
+        let result_body = response::extract_body_to_string(response);
+        assert_eq!(result_body,
+                   "{\
+            \"ident\":{\
+                \"origin\":\"org\",\
+                \"name\":\"name\",\
+                \"version\":\"1.1.1\",\
+                \"release\":\"20170101010101\"\
+            },\
+            \"checksum\":\"checksum\",\
+            \"manifest\":\"manifest\",\
+            \"target\":\"x86_64-linux\",\
+            \"deps\":[{\
+                \"origin\":\"dep_org\",\
+                \"name\":\"dep_name\",\
+                \"version\":\"1.1.1-dep\",\
+                \"release\":\"20170101010102\"\
+            }],\
+            \"tdeps\":[{\
+                \"origin\":\"tdep_org\",\
+                \"name\":\"tdep_name\",\
+                \"version\":\"1.1.1-tdep\",\
+                \"release\":\"20170101010103\"\
+            }],\
+            \"exposes\":[],\
+            \"config\":\"config\"\
+        }");
+
+        //assert we sent the corect requests to postgres
+        let latest_req = msgs.get::<OriginPackageLatestGet>().unwrap();
+        assert_eq!(latest_req.get_ident().to_string(), "org/name".to_string());
+        assert_eq!(latest_req.get_target().to_string(),
+                   "x86_64-linux".to_string());
         let package_req = msgs.get::<OriginPackageGet>().unwrap();
         assert_eq!(package_req.get_ident().to_string(), ident.to_string());
     }

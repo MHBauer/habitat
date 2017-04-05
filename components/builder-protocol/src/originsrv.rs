@@ -451,6 +451,14 @@ impl Routable for OriginPackageGet {
     }
 }
 
+impl Routable for OriginPackageLatestGet {
+    type H = String;
+
+    fn route_key(&self) -> Option<Self::H> {
+        Some(String::from(self.get_ident().get_origin()))
+    }
+}
+
 impl Routable for OriginPackageCreate {
     type H = String;
 

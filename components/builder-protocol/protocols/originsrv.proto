@@ -206,6 +206,12 @@ message OriginPackageGet {
   optional OriginPackageIdent ident = 2;
 }
 
+message OriginPackageLatestGet {
+  optional uint64 owner_id = 1;
+  optional OriginPackageIdent ident = 2;
+  optional string target = 3;
+}
+
 message OriginPackageIdent {
   optional string origin = 1;
   optional string name = 2;
