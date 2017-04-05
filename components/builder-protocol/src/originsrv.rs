@@ -576,3 +576,15 @@ impl fmt::Display for OriginPackage {
         self.get_ident().fmt(f)
     }
 }
+
+impl Serialize for OriginKeyIdent {
+    fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut strukt = try!(serializer.serialize_struct("origin_key", 3));
+        try!(strukt.serialize_field("origin", self.get_origin()));
+        try!(strukt.serialize_field("revision", self.get_revision()));
+        try!(strukt.serialize_field("location", self.get_location()));
+        strukt.end()
+    }
+}

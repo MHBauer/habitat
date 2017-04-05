@@ -43,7 +43,7 @@ use iron::typemap::Key;
 use mount::Mount;
 use persistent;
 use protobuf::{self, parse_from_bytes};
-use protocol::{depotsrv, Routable};
+use protocol::Routable;
 use protocol::net::{ErrCode, NetError};
 use protocol::sessionsrv::{Account, AccountGet};
 use protocol::scheduler::{Group, GroupCreate, GroupGet};
@@ -962,10 +962,10 @@ fn list_origin_keys(req: &mut Request) -> IronResult<Response> {
     };
     match route_message::<OriginPublicKeyListRequest, OriginPublicKeyListResponse>(req, &request) {
         Ok(list) => {
-            let list: Vec<depotsrv::OriginKeyIdent> = list.get_keys()
+            let list: Vec<OriginKeyIdent> = list.get_keys()
                 .iter()
                 .map(|key| {
-                    let mut ident = depotsrv::OriginKeyIdent::new();
+                    let mut ident = OriginKeyIdent::new();
                     ident.set_location(format!("/origins/{}/keys/{}",
                                                &key.get_name(),
                                                &key.get_revision()));
