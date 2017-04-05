@@ -9,7 +9,6 @@ if [[ $is_tmp_commit = 0 ]]; then
 fi
 
 set -e
-mkdir -p /hab/svc/builder-depot
 if [ "${TRAVIS_PULL_REQUEST}" = "false" ]; then
   make unit-${COMPONENTS:-all}
 else
