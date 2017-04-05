@@ -1723,6 +1723,7 @@ mod test {
     use protocol::net::{self, ErrCode};
     use protocol::sessionsrv::Session;
 
+    use std::env;
     use std::fs::File;
     use std::io::Cursor;
     use std::path::PathBuf;
@@ -1766,7 +1767,10 @@ mod test {
         let http_request = hyper::server::Request::new(&mut buf_reader, addr).unwrap();
         let mut req = Request::from_http(http_request, addr, &iron::Protocol::http()).unwrap();
 
-        let depot = DepotUtil::new(Config::default());
+
+        let mut config = Config::default();
+        config.path = env::temp_dir().join("depot-tests").to_string_lossy().to_string();
+        let depot = DepotUtil::new(config);
         req.extensions.insert::<Authenticated>(Session::new());
         req.extensions.insert::<TestableBroker>(broker);
 
@@ -1835,7 +1839,9 @@ mod test {
     #[test]
     fn upload_package() {
         //Remove file saved from previous test
-        let depot = DepotUtil::new(Config::default());
+        let mut config = Config::default();
+        config.path = env::temp_dir().join("depot-tests").to_string_lossy().to_string();
+        let depot = DepotUtil::new(config);
         let mut ident = OriginPackageIdent::new();
         ident.set_origin("core".to_string());
         ident.set_name("cacerts".to_string());
