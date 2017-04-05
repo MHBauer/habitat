@@ -248,6 +248,13 @@ message OriginPackageListRequest {
   optional uint64 stop = 3;
 }
 
+message OriginPackageSearchRequest {
+  optional string origin = 1;
+  optional string query = 2;
+  optional uint64 start = 3;
+  optional uint64 stop = 4;
+}
+
 message OriginPackageListResponse {
   optional uint64 origin_id = 1;
   optional uint64 start = 2;

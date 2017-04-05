@@ -483,6 +483,14 @@ impl Routable for OriginPackageListRequest {
     }
 }
 
+impl Routable for OriginPackageSearchRequest {
+    type H = String;
+
+    fn route_key(&self) -> Option<Self::H> {
+        Some(String::from(self.get_origin()))
+    }
+}
+
 impl Serialize for OriginPackageIdent {
     fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
         where S: Serializer

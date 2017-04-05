@@ -1347,46 +1347,57 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
 }
 
 fn search_packages(req: &mut Request) -> IronResult<Response> {
-    let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
-    let depot = lock.read().expect("depot read lock is poisoned");
+    let mut request = OriginPackageSearchRequest::new();
     let (start, stop) = match extract_pagination(req) {
         Ok(range) => range,
         Err(response) => return Ok(response),
     };
-    let params = req.extensions.get::<Router>().unwrap();
-    let partial = params.find("query").unwrap();
+    request.set_start(start as u64);
+    request.set_stop(stop as u64);
 
-    debug!("search_packages called with: {}", partial);
-    Counter::SearchPackages.increment();
-    Gauge::PackageCount.set(depot.datastore.key_count().unwrap() as f64);
-
-    // Note: the search call takes offset and count values
-    let (packages, total_count) = depot.datastore
-        .packages
-        .index
-        .search(partial, start, stop - start + 1)
-        .unwrap();
-
-    debug!("search_packages offset: {}, count: {}, packages len: {}, total_count: {}",
-           start,
-           stop - start + 1,
-           packages.len(),
-           total_count);
-
-    let body = package_results_json(&packages, total_count, start, stop);
-
-    let mut response = if total_count > (stop + 1) {
-        Response::with((status::PartialContent, body))
-    } else {
-        Response::with((status::Ok, body))
+    {
+        let params = req.extensions.get::<Router>().unwrap();
+        request.set_query(params.find("query").unwrap().to_string());
     };
 
-    response.headers.set(ContentType(Mime(TopLevel::Application,
-                                          SubLevel::Json,
-                                          vec![(Attr::Charset, Value::Utf8)])));
+    debug!("search_packages called with: {}", request.get_query());
 
-    dont_cache_response(&mut response);
-    Ok(response)
+    // Not sure if we need this
+    // Counter::SearchPackages.increment();
+    // Gauge::PackageCount.set(depot.datastore.key_count().unwrap() as f64);
+
+    // TODO MW: constraining to core is temporary until we have a cross origin index
+    request.set_origin("core".to_string());
+    match route_message::<OriginPackageSearchRequest, OriginPackageListResponse>(req,
+                                                                                &request) {
+        Ok(packages) => {
+            debug!("search_packages start: {}, stop: {}, total count: {}",
+                    packages.get_start(),
+                    packages.get_stop(),
+                    packages.get_count());
+            let body = package_results_json(&packages.get_idents().to_vec(),
+                                            packages.get_count() as isize,
+                                            packages.get_start() as isize,
+                                            packages.get_stop() as isize);
+
+            let mut response = if packages.get_count() as isize >
+                                    (packages.get_stop() as isize + 1) {
+                Response::with((status::PartialContent, body))
+            } else {
+                Response::with((status::Ok, body))
+            };
+
+            response.headers.set(ContentType(Mime(TopLevel::Application,
+                                                    SubLevel::Json,
+                                                    vec![(Attr::Charset, Value::Utf8)])));
+            dont_cache_response(&mut response);
+            Ok(response)
+        }
+        Err(err) => {
+                error!("search_packages:2, err={:?}", err);
+                Ok(Response::with(status::InternalServerError))
+        }
+    }
 }
 
 fn render_package(pkg: &depotsrv::Package, should_cache: bool) -> IronResult<Response> {
@@ -2244,5 +2255,71 @@ mod test {
                    "x86_64-linux".to_string());
         let package_req = msgs.get::<OriginPackageGet>().unwrap();
         assert_eq!(package_req.get_ident().to_string(), ident.to_string());
+    }
+
+    #[test]
+    fn search_packages() {
+        let mut broker: TestableBroker = Default::default();
+
+        let mut pkg_res = OriginPackageListResponse::new();
+        pkg_res.set_start(0);
+        pkg_res.set_stop(1);
+        pkg_res.set_count(2);
+        let mut packages = protobuf::RepeatedField::new();
+
+        let mut ident1 = OriginPackageIdent::new();
+        ident1.set_origin("org".to_string());
+        ident1.set_name("name1".to_string());
+        ident1.set_version("1.1.1".to_string());
+        ident1.set_release("20170101010101".to_string());
+        packages.push(ident1);
+
+        let mut ident2 = OriginPackageIdent::new();
+        ident2.set_origin("org".to_string());
+        ident2.set_name("name2".to_string());
+        ident2.set_version("2.2.2".to_string());
+        ident2.set_release("20170202020202".to_string());
+        packages.push(ident2);
+
+        pkg_res.set_idents(packages);
+        broker.setup::<OriginPackageSearchRequest, OriginPackageListResponse>(&pkg_res);
+
+        let (response, msgs) = iron_request(method::Get,
+                                            "http://localhost/pkgs/search/name?range=2",
+                                            &mut Vec::new(),
+                                            Headers::new(),
+                                            broker);
+
+        let response = response.unwrap();
+        assert_eq!(response.status, Some(status::Ok));
+
+        let result_body = response::extract_body_to_string(response);
+
+        assert_eq!(result_body,
+                   "{\
+            \"range_start\":0,\
+            \"range_end\":1,\
+            \"total_count\":2,\
+            \"package_list\":[\
+                {\
+                    \"origin\":\"org\",\
+                    \"name\":\"name1\",\
+                    \"version\":\"1.1.1\",\
+                    \"release\":\"20170101010101\"\
+                },\
+                {\
+                    \"origin\":\"org\",\
+                    \"name\":\"name2\",\
+                    \"version\":\"2.2.2\",\
+                    \"release\":\"20170202020202\"\
+                }\
+            ]\
+        }");
+
+        //assert we sent the corect range to postgres
+        let package_req = msgs.get::<OriginPackageSearchRequest>().unwrap();
+        assert_eq!(package_req.get_start(), 2);
+        assert_eq!(package_req.get_stop(), 51);
+        assert_eq!(package_req.get_query(), "name".to_string());
     }
 }
