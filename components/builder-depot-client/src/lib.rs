@@ -377,7 +377,8 @@ impl Client {
         let mut encoded = String::new();
         try!(res.read_to_string(&mut encoded));
         debug!("Body: {:?}", encoded);
-        let package: originsrv::OriginPackage = try!(serde_json::from_str::<Package>(&encoded)).into();
+        let package: originsrv::OriginPackage = try!(serde_json::from_str::<Package>(&encoded))
+            .into();
         Ok(package)
     }
 
