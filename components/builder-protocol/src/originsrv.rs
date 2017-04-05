@@ -570,3 +570,9 @@ impl FromArchive for OriginPackageCreate {
         Ok(package)
     }
 }
+
+impl fmt::Display for OriginPackage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.get_ident().fmt(f)
+    }
+}

@@ -1239,7 +1239,7 @@ fn delete_channel(req: &mut Request) -> IronResult<Response> {
 }
 
 fn show_package(req: &mut Request) -> IronResult<Response> {
-    let (origin, ident, mut origin_ident, channel) = {
+    let (origin, mut ident, channel) = {
         let params = req.extensions.get::<Router>().unwrap();
 
         let origin = match params.find("origin") {
@@ -1247,15 +1247,14 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
             _ => return Ok(Response::with(status::BadRequest)),
         };
 
-        let ident = ident_from_params(params);
-        let origin_ident = origin_ident_from_params(params);
+        let ident = origin_ident_from_params(params);
 
         let channel = match params.find("channel") {
             Some(ch) => Some(ch.to_owned()),
             None => None,
         };
 
-        (origin, ident, origin_ident, channel)
+        (origin, ident, channel)
     };
 
     // let's make sure this origin actually exists
@@ -1263,6 +1262,7 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
         return Ok(Response::with(status::NotFound));
     }
 
+    let qualified = ident.fully_qualified();
     if let Some(channel) = channel {
         let lock = req.get::<persistent::State<Depot>>().expect("depot not found");
         let mut depot = lock.write().expect("depot read lock is poisoned");
@@ -1271,15 +1271,29 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
             return Ok(Response::with(status::NotFound));
         }
 
-        if !ident.fully_qualified() {
+        if !qualified {
             match depot.datastore.channels.latest(&origin, channel.as_str(), &ident.to_string()) {
                 Some(ident) => {
-                    match depot.datastore.packages.find(&ident) {
-                        Ok(pkg) => render_package(&pkg, false),
-                        Err(dbcache::Error::EntityNotFound) => Ok(Response::with(status::NotFound)),
-                        Err(e) => {
-                            error!("show_package:1, err={:?}", e);
-                            Ok(Response::with(status::InternalServerError))
+                    let mut request = OriginPackageGet::new();
+                    request.set_ident(ident.clone());
+                    match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
+                        Ok(pkg) => {
+                            // If the request was for a fully qualified ident, cache the response, otherwise do
+                            // not cache
+                            if qualified {
+                                render_origin_package(&pkg, true)
+                            } else {
+                                render_origin_package(&pkg, false)
+                            }
+                        }
+                        Err(err) => {
+                            match err.get_code() {
+                                ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                                _ => {
+                                    error!("show_package:2, err={:?}", err);
+                                    Ok(Response::with(status::InternalServerError))
+                                }
+                            }
                         }
                     }
                 }
@@ -1288,12 +1302,18 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
         } else {
             let key = format!("{}/{}", &origin, &channel);
             if depot.datastore.channels.package_exists(&key, &ident) {
-                match depot.datastore.packages.find(&ident) {
-                    Ok(pkg) => render_package(&pkg, false),
-                    Err(dbcache::Error::EntityNotFound) => Ok(Response::with(status::NotFound)),
-                    Err(e) => {
-                        error!("show_package:3, err={:?}", e);
-                        Ok(Response::with(status::InternalServerError))
+                let mut request = OriginPackageGet::new();
+                request.set_ident(ident);
+                match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
+                    Ok(pkg) => render_origin_package(&pkg, false),
+                    Err(err) => {
+                        match err.get_code() {
+                            ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                            _ => {
+                                error!("show_package:3, err={:?}", err);
+                                Ok(Response::with(status::InternalServerError))
+                            }
+                        }
                     }
                 }
             } else {
@@ -1301,14 +1321,14 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
             }
         }
     } else {
-        if !origin_ident.fully_qualified() {
+        if !qualified {
             let mut request = OriginPackageLatestGet::new();
-            request.set_ident(origin_ident);
+            request.set_ident(ident);
             request.set_target(target_from_headers(&req.headers.get::<UserAgent>().unwrap())
                                    .unwrap()
                                    .to_string());
             match route_message::<OriginPackageLatestGet, OriginPackageIdent>(req, &request) {
-                Ok(id) => origin_ident = id.into(),
+                Ok(id) => ident = id.into(),
                 Err(err) => {
                     match err.get_code() {
                         ErrCode::ENTITY_NOT_FOUND => return Ok(Response::with((status::NotFound))),
@@ -1322,12 +1342,12 @@ fn show_package(req: &mut Request) -> IronResult<Response> {
         }
 
         let mut request = OriginPackageGet::new();
-        request.set_ident(origin_ident);
+        request.set_ident(ident);
         match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
             Ok(pkg) => {
                 // If the request was for a fully qualified ident, cache the response, otherwise do
                 // not cache
-                if request.get_ident().fully_qualified() {
+                if qualified {
                     render_origin_package(&pkg, true)
                 } else {
                     render_origin_package(&pkg, false)
@@ -1463,7 +1483,7 @@ fn promote_package(req: &mut Request) -> IronResult<Response> {
             _ => return Ok(Response::with(status::BadRequest)),
         };
 
-        let mut ident = depotsrv::PackageIdent::new();
+        let mut ident = OriginPackageIdent::new();
         ident.set_name(pkg);
         ident.set_version(version);
         ident.set_release(release);
@@ -1482,7 +1502,9 @@ fn promote_package(req: &mut Request) -> IronResult<Response> {
                 return Ok(Response::with(status::Forbidden));
             }
 
-            match depot.datastore.packages.find(&ident) {
+            let mut request = OriginPackageGet::new();
+            request.set_ident(ident);
+            match route_message::<OriginPackageGet, OriginPackage>(req, &request) {
                 Ok(package) => {
                     depot.datastore
                         .channels
@@ -1490,10 +1512,14 @@ fn promote_package(req: &mut Request) -> IronResult<Response> {
                         .unwrap();
                     Ok(Response::with(status::Ok))
                 }
-                Err(dbcache::Error::EntityNotFound) => Ok(Response::with(status::NotFound)),
-                Err(e) => {
-                    error!("promote:2, err={:?}", e);
-                    return Ok(Response::with(status::InternalServerError));
+                Err(err) => {
+                    match err.get_code() {
+                        ErrCode::ENTITY_NOT_FOUND => Ok(Response::with((status::NotFound))),
+                        _ => {
+                            error!("promote:2, err={:?}", err);
+                            Ok(Response::with(status::InternalServerError))
+                        }
+                    }
                 }
             }
         }

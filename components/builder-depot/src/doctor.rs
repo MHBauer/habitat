@@ -198,10 +198,11 @@ impl<'a> Doctor<'a> {
                 Ok(ident) => {
                     match depotsrv::Package::from_archive(&mut archive) {
                         Ok(object) => {
-                            try!(self.depot
-                                     .datastore
-                                     .packages
-                                     .write(&object));
+                            // TODO: MW - we need to rethink how repair will work in postgres
+                            // try!(self.depot
+                            //          .datastore
+                            //          .packages
+                            //          .write(&object));
                             let path = self.depot.archive_path(&ident, &try!(archive.target()));
                             if let Some(e) = fs::create_dir_all(path.parent().unwrap()).err() {
                                 self.report
