@@ -571,6 +571,37 @@ impl FromArchive for OriginPackageCreate {
     }
 }
 
+impl FromArchive for OriginPackage {
+    type Error = hab_core::Error;
+
+    fn from_archive(archive: &mut PackageArchive) -> hab_core::Result<Self> {
+        let ident = match archive.ident() {
+            Ok(value) => OriginPackageIdent::from(value),
+            Err(e) => return Err(hab_core::Error::from(e)),
+        };
+        let manifest = try!(archive.manifest());
+        let deps = try!(archive.deps()).into_iter().map(|d| d.into()).collect();
+        let tdeps = try!(archive.tdeps()).into_iter().map(|d| d.into()).collect();
+        let exposes = try!(archive.exposes()).into_iter().map(|d| d as u32).collect();
+        let config = try!(archive.config());
+        let checksum = try!(archive.checksum());
+        let target = try!(archive.target());
+
+        let mut package = OriginPackage::new();
+        package.set_ident(ident);
+        package.set_manifest(manifest);
+        package.set_target(target.to_string());
+        package.set_deps(deps);
+        package.set_tdeps(tdeps);
+        package.set_exposes(exposes);
+        if let Some(cfg) = config {
+            package.set_config(cfg);
+        }
+        package.set_checksum(checksum);
+        Ok(package)
+    }
+}
+
 impl fmt::Display for OriginPackage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.get_ident().fmt(f)

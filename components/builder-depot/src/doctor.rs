@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use hab_core;
 use hab_core::package::{FromArchive, PackageArchive};
-use protocol::depotsrv;
+use protocol::originsrv;
 use time;
 use walkdir::WalkDir;
 
@@ -195,7 +195,7 @@ impl<'a> Doctor<'a> {
             let mut archive = PackageArchive::new(PathBuf::from(entry.path()));
             match archive.ident() {
                 Ok(ident) => {
-                    match depotsrv::Package::from_archive(&mut archive) {
+                    match originsrv::OriginPackage::from_archive(&mut archive) {
                         Ok(object) => {
                             // TODO: MW - we need to rethink how repair will work in postgres
                             // try!(self.depot
