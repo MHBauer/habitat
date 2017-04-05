@@ -1387,34 +1387,33 @@ fn search_packages(req: &mut Request) -> IronResult<Response> {
 
     // TODO MW: constraining to core is temporary until we have a cross origin index
     request.set_origin("core".to_string());
-    match route_message::<OriginPackageSearchRequest, OriginPackageListResponse>(req,
-                                                                                &request) {
+    match route_message::<OriginPackageSearchRequest, OriginPackageListResponse>(req, &request) {
         Ok(packages) => {
             debug!("search_packages start: {}, stop: {}, total count: {}",
-                    packages.get_start(),
-                    packages.get_stop(),
-                    packages.get_count());
+                   packages.get_start(),
+                   packages.get_stop(),
+                   packages.get_count());
             let body = package_results_json(&packages.get_idents().to_vec(),
                                             packages.get_count() as isize,
                                             packages.get_start() as isize,
                                             packages.get_stop() as isize);
 
             let mut response = if packages.get_count() as isize >
-                                    (packages.get_stop() as isize + 1) {
+                                  (packages.get_stop() as isize + 1) {
                 Response::with((status::PartialContent, body))
             } else {
                 Response::with((status::Ok, body))
             };
 
             response.headers.set(ContentType(Mime(TopLevel::Application,
-                                                    SubLevel::Json,
-                                                    vec![(Attr::Charset, Value::Utf8)])));
+                                                  SubLevel::Json,
+                                                  vec![(Attr::Charset, Value::Utf8)])));
             dont_cache_response(&mut response);
             Ok(response)
         }
         Err(err) => {
-                error!("search_packages:2, err={:?}", err);
-                Ok(Response::with(status::InternalServerError))
+            error!("search_packages:2, err={:?}", err);
+            Ok(Response::with(status::InternalServerError))
         }
     }
 }
