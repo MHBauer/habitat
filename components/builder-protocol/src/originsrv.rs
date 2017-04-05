@@ -8,7 +8,7 @@ use std::fmt;
 use std::result;
 
 use hab_core;
-use hab_core::package::{Identifiable, FromArchive, PackageArchive};
+use hab_core::package::{self, Identifiable, FromArchive, PackageArchive};
 
 use serde::{Serialize, Serializer};
 use serde::ser::SerializeStruct;
@@ -434,15 +434,6 @@ impl fmt::Display for OriginPackageIdent {
     }
 }
 
-impl Into<hab_core::package::PackageIdent> for OriginPackageIdent {
-    fn into(self) -> hab_core::package::PackageIdent {
-        hab_core::package::PackageIdent::new(self.get_origin(),
-                                             self.get_name(),
-                                             Some(self.get_version()),
-                                             Some(self.get_release()))
-    }
-}
-
 impl Routable for OriginPackageGet {
     type H = String;
 
@@ -617,5 +608,20 @@ impl Serialize for OriginKeyIdent {
         try!(strukt.serialize_field("revision", self.get_revision()));
         try!(strukt.serialize_field("location", self.get_location()));
         strukt.end()
+    }
+}
+
+impl Into<package::PackageIdent> for OriginPackageIdent {
+    fn into(self) -> package::PackageIdent {
+        package::PackageIdent::new(self.get_origin(),
+                                   self.get_name(),
+                                   Some(self.get_version()),
+                                   Some(self.get_release()))
+    }
+}
+
+impl Into<package::PackageIdent> for OriginPackage {
+    fn into(self) -> package::PackageIdent {
+        self.get_ident().clone().into()
     }
 }
